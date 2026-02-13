@@ -41,6 +41,13 @@ Reserved (not implemented in behavior):
 cargo run -- serve --config ./config/example-config.yaml
 ```
 
+Build a single binary:
+
+```bash
+cargo build --release
+./target/release/arbiter serve --config ./config/example-config.yaml
+```
+
 Endpoints:
 
 - `POST /v0/events`
@@ -48,6 +55,28 @@ Endpoints:
 - `POST /v0/action-results`
 - `GET /v0/contracts`
 - `GET /v0/healthz`
+
+## Local verification
+
+Run the same checks as CI:
+
+```bash
+make ci
+```
+
+Or run each step directly:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --release
+```
+
+## CI
+
+GitHub Actions runs format, lint, test, and release build on push and pull request.
+Workflow file: `.github/workflows/ci.yml`.
 
 ## Design documents
 
