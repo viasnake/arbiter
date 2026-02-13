@@ -1,0 +1,26 @@
+[tools]
+rust = "stable"
+
+[tasks.fmt]
+description = "Format Rust code"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check Rust formatting"
+run = "cargo fmt --all --check"
+
+[tasks.lint]
+description = "Run clippy with warnings denied"
+run = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks.test]
+description = "Run workspace tests"
+run = "cargo test --workspace"
+
+[tasks.build]
+description = "Build release binary"
+run = "cargo build --release"
+
+[tasks.ci]
+description = "Run full local CI pipeline"
+depends = ["fmt-check", "lint", "test", "build"]

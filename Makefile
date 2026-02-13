@@ -1,19 +1,16 @@
 .PHONY: fmt lint test build ci
 
 fmt:
-	cargo fmt --all
+	mise run fmt
 
 lint:
-	cargo clippy --workspace --all-targets -- -D warnings
+	mise run lint
 
 test:
-	cargo test --workspace
+	mise run test
 
 build:
-	cargo build --release
+	mise run build
 
 ci:
-	cargo fmt --all --check
-	cargo clippy --workspace --all-targets -- -D warnings
-	cargo test --workspace
-	cargo build --release
+	mise run ci
