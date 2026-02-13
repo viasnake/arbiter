@@ -29,15 +29,7 @@ pub async fn serve(cfg: Config) -> Result<(), String> {
         .parse()
         .map_err(|e| format!("invalid listen_addr: {e}"))?;
 
-    let state = AppState::new(cfg).await?;
-
-    let app = Router::new()
-        .route("/v0/healthz", get(healthz))
-        .route("/v0/events", post(events))
-        .route("/v0/generations", post(generations))
-        .route("/v0/action-results", post(action_results))
-        .route("/v0/contracts", get(contracts))
-        .with_state(state);
+    let app = build_app(cfg).await?;
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -45,6 +37,17 @@ pub async fn serve(cfg: Config) -> Result<(), String> {
     axum::serve(listener, app)
         .await
         .map_err(|e| format!("serve failed: {e}"))
+}
+
+pub async fn build_app(cfg: Config) -> Result<Router, String> {
+    let state = AppState::new(cfg).await?;
+    Ok(Router::new()
+        .route("/v0/healthz", get(healthz))
+        .route("/v0/events", post(events))
+        .route("/v0/generations", post(generations))
+        .route("/v0/action-results", post(action_results))
+        .route("/v0/contracts", get(contracts))
+        .with_state(state))
 }
 
 #[derive(Clone)]
@@ -70,7 +73,10 @@ impl AppState {
 
         if let Some(existing) = {
             let store = self.store.lock().await;
-            store.idempotency.get(&event_key(&event.tenant_id, &event.event_id)).cloned()
+            store
+                .idempotency
+                .get(&event_key(&event.tenant_id, &event.event_id))
+                .cloned()
         } {
             self.audit
                 .append(AuditRecord::new(
@@ -85,7 +91,8 @@ impl AppState {
             return Ok(existing);
         }
 
-        let event_ts = parse_event_ts(&event.ts).ok_or_else(|| "invalid ts (RFC3339 required)".to_string())?;
+        let event_ts =
+            parse_event_ts(&event.ts).ok_or_else(|| "invalid ts (RFC3339 required)".to_string())?;
 
         let mut store = self.store.lock().await;
         let room_key = room_key(&event.tenant_id, &event.room_id);
@@ -102,8 +109,15 @@ impl AppState {
             max_queue: self.cfg.gate.max_queue,
             tenant_rate_limit_per_min: self.cfg.gate.tenant_rate_limit_per_min,
         };
-        if let GateDecision::Deny { reason_code } = evaluate_gate(&room, event_ts, &gate_cfg, tenant_count) {
-            let plan = do_nothing_plan(&event.tenant_id, &event.room_id, &event.event_id, reason_code);
+        if let GateDecision::Deny { reason_code } =
+            evaluate_gate(&room, event_ts, &gate_cfg, tenant_count)
+        {
+            let plan = do_nothing_plan(
+                &event.tenant_id,
+                &event.room_id,
+                &event.event_id,
+                reason_code,
+            );
             store
                 .idempotency
                 .insert(event_key(&event.tenant_id, &event.event_id), plan.clone());
@@ -125,7 +139,12 @@ impl AppState {
 
         let authz = self.authz.authorize(&event).await;
         if !authz.allow {
-            let plan = do_nothing_plan(&event.tenant_id, &event.room_id, &event.event_id, &authz.reason_code);
+            let plan = do_nothing_plan(
+                &event.tenant_id,
+                &event.room_id,
+                &event.event_id,
+                &authz.reason_code,
+            );
             let mut store = self.store.lock().await;
             store
                 .idempotency
@@ -152,7 +171,12 @@ impl AppState {
         let intent = decide_intent(&event, &planner_cfg);
 
         let plan = match intent {
-            Intent::Ignore => do_nothing_plan(&event.tenant_id, &event.room_id, &event.event_id, "planner_ignore"),
+            Intent::Ignore => do_nothing_plan(
+                &event.tenant_id,
+                &event.room_id,
+                &event.event_id,
+                "planner_ignore",
+            ),
             Intent::Reply | Intent::Message => {
                 request_generation_plan(&event, intent, &authz.reason_code)
             }
@@ -218,7 +242,12 @@ impl AppState {
             Some(v) => v,
             None => {
                 drop(store);
-                let plan = do_nothing_plan(&input.tenant_id, "", &input.action_id, "generation_unknown_action");
+                let plan = do_nothing_plan(
+                    &input.tenant_id,
+                    "",
+                    &input.action_id,
+                    "generation_unknown_action",
+                );
                 self.audit
                     .append(AuditRecord::new(
                         &input.tenant_id,
@@ -285,11 +314,12 @@ async fn events(
     State(state): State<AppState>,
     Json(event): Json<Event>,
 ) -> Result<Json<ResponsePlan>, (StatusCode, Json<Value>)> {
-    state
-        .process_event(event)
-        .await
-        .map(Json)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": {"code":"validation_error","message": e}}))))
+    state.process_event(event).await.map(Json).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code":"validation_error","message": e}})),
+        )
+    })
 }
 
 async fn generations(
@@ -300,7 +330,12 @@ async fn generations(
         .process_generation(input)
         .await
         .map(Json)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": {"code":"validation_error","message": e}}))))
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"code":"validation_error","message": e}})),
+            )
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -318,7 +353,9 @@ async fn action_results(
     if input.tenant_id.is_empty() || input.correlation_id.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": {"code":"validation_error","message":"tenant_id and correlation_id are required"}})),
+            Json(
+                json!({"error": {"code":"validation_error","message":"tenant_id and correlation_id are required"}}),
+            ),
         ));
     }
     state
@@ -378,7 +415,10 @@ struct CachedDecision {
 impl AuthzEngine {
     fn new(cfg: &Config) -> Result<Self, String> {
         let timeout = Duration::from_millis(cfg.authz.timeout_ms as u64);
-        let client = Client::builder().timeout(timeout).build().map_err(|e| e.to_string())?;
+        let client = Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             mode: cfg.authz.mode.clone(),
             endpoint: cfg.authz.endpoint.clone(),
@@ -435,7 +475,10 @@ impl AuthzEngine {
                 },
                 context: {
                     let mut m = Map::new();
-                    m.insert("event_id".to_string(), Value::String(event.event_id.clone()));
+                    m.insert(
+                        "event_id".to_string(),
+                        Value::String(event.event_id.clone()),
+                    );
                     m
                 },
             },
@@ -628,16 +671,18 @@ fn pending_key(tenant_id: &str, action_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonschema::Validator;
 
-    #[tokio::test]
-    async fn response_plan_schema_conformance() {
-        let schema_text = std::fs::read_to_string("contracts/v0/response_plan.schema.json").unwrap();
-        let schema: Value = serde_json::from_str(&schema_text).unwrap();
-        let validator: Validator = jsonschema::validator_for(&schema).unwrap();
-
-        let plan = do_nothing_plan("t1", "r1", "e1", "x");
-        let value = serde_json::to_value(plan).unwrap();
-        assert!(validator.validate(&value).is_ok());
+    #[test]
+    fn validate_response_plan_rejects_empty_actions() {
+        let p = ResponsePlan {
+            v: 0,
+            plan_id: "p".to_string(),
+            tenant_id: "t".to_string(),
+            room_id: "r".to_string(),
+            actions: vec![],
+            policy_decisions: vec![],
+            debug: Map::new(),
+        };
+        assert!(validate_response_plan(&p).is_err());
     }
 }
