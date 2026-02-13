@@ -1,0 +1,17 @@
+[package]
+name = "arbiter"
+version = "0.0.1"
+edition = "2021"
+
+[workspace]
+members = [
+  "crates/arbiter-contracts",
+  "crates/arbiter-config",
+  "crates/arbiter-kernel",
+  "crates/arbiter-server",
+]
+
+[dependencies]
+arbiter-config = { path = "crates/arbiter-config" }
+arbiter-server = { path = "crates/arbiter-server" }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }

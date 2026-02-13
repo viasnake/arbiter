@@ -1,0 +1,10 @@
+[package]
+name = "arbiter-kernel"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+arbiter-contracts = { path = "../arbiter-contracts" }
+chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
