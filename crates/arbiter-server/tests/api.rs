@@ -118,7 +118,8 @@ async fn idempotency_same_event_same_plan() {
 
 #[test]
 fn event_input_and_plan_output_match_schemas() {
-    let event_schema_text = std::fs::read_to_string(repo_path("contracts/v0/event.schema.json")).unwrap();
+    let event_schema_text =
+        std::fs::read_to_string(repo_path("contracts/v0/event.schema.json")).unwrap();
     let event_schema: Value = serde_json::from_str(&event_schema_text).unwrap();
     let event_validator: Validator = jsonschema::validator_for(&event_schema).unwrap();
 
@@ -128,7 +129,8 @@ fn event_input_and_plan_output_match_schemas() {
     let action_schema_text =
         std::fs::read_to_string(repo_path("contracts/v0/action.schema.json")).unwrap();
     let action_schema: Value = serde_json::from_str(&action_schema_text).unwrap();
-    plan_schema["properties"]["actions"]["items"]["$ref"] = Value::String("#/$defs/action".to_string());
+    plan_schema["properties"]["actions"]["items"]["$ref"] =
+        Value::String("#/$defs/action".to_string());
     plan_schema["$defs"] = json!({"action": action_schema});
     let plan_validator: Validator = jsonschema::validator_for(&plan_schema).unwrap();
 

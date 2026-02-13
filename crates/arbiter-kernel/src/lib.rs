@@ -5,21 +5,11 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RoomState {
     pub generating: bool,
     pub pending_queue_size: usize,
     pub last_send_at: Option<DateTime<Utc>>,
-}
-
-impl Default for RoomState {
-    fn default() -> Self {
-        Self {
-            generating: false,
-            pending_queue_size: 0,
-            last_send_at: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -351,9 +341,11 @@ mod tests {
 
     #[test]
     fn gate_order() {
-        let mut room = RoomState::default();
-        room.generating = true;
-        room.pending_queue_size = 100;
+        let room = RoomState {
+            generating: true,
+            pending_queue_size: 100,
+            ..Default::default()
+        };
         let cfg = GateConfig {
             cooldown_ms: 1,
             max_queue: 1,
