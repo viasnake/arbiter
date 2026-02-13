@@ -1,0 +1,29 @@
+server:
+  listen_addr: "0.0.0.0:8080"
+
+store:
+  type: "memory"
+
+authz:
+  mode: "external_http"
+  endpoint: "http://localhost:8081/v0/authorize"
+  timeout_ms: 300
+  fail_mode: "deny"
+  cache:
+    enabled: true
+    ttl_ms: 30000
+    max_entries: 100000
+
+gate:
+  cooldown_ms: 3000
+  max_queue: 10
+  tenant_rate_limit_per_min: 0
+
+planner:
+  reply_policy: "mention_first"
+  reply_probability: 0.3
+
+audit:
+  sink: "jsonl"
+  jsonl_path: "./arbiter-audit.jsonl"
+  include_authz_decision: true

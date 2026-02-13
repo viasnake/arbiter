@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/contracts/v0/event.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v","event_id","tenant_id","source","room_id","actor","content","ts"],
+  "properties": {
+    "v": { "type": "integer", "const": 0 },
+    "event_id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "source": { "type": "string", "minLength": 1 },
+    "room_id": { "type": "string", "minLength": 1 },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type","id"],
+      "properties": {
+        "type": { "enum": ["human","service","system"] },
+        "id": { "type": "string", "minLength": 1 },
+        "roles": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "claims": { "type": "object", "default": {} }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["text"] },
+        "text": { "type": "string" },
+        "reply_to": { "type": ["string","null"] }
+      }
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "extensions": { "type": "object", "default": {} }
+  }
+}

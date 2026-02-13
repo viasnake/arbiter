@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/config/v0/config.schema.json",
+  "title": "Arbiter Configuration Schema v0.0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "server",
+    "store",
+    "authz",
+    "gate",
+    "planner",
+    "audit"
+  ],
+  "properties": {
+
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["listen_addr"],
+      "properties": {
+        "listen_addr": {
+          "type": "string",
+          "description": "Bind address (host:port)",
+          "default": "0.0.0.0:8080"
+        }
+      }
+    },
+
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["memory", "sqlite"]
+        },
+        "sqlite_path": {
+          "type": "string",
+          "description": "Path to sqlite database file"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "sqlite" } } },
+          "then": { "required": ["sqlite_path"] }
+        }
+      ]
+    },
+
+    "authz": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "fail_mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["builtin", "external_http"]
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "External RBAC provider endpoint (required if mode=external_http)"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 300
+        },
+        "fail_mode": {
+          "type": "string",
+          "enum": ["deny", "allow", "fallback_builtin"],
+          "default": "deny"
+        },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "ttl_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 30000
+            },
+            "max_entries": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 100000
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "external_http" } } },
+          "then": { "required": ["endpoint"] }
+        }
+      ]
+    },
+
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cooldown_ms", "max_queue"],
+      "properties": {
+        "cooldown_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3000
+        },
+        "max_queue": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10
+        },
+        "tenant_rate_limit_per_min": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+
+    "planner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reply_policy"],
+      "properties": {
+        "reply_policy": {
+          "type": "string",
+          "enum": [
+            "all",
+            "mention_first",
+            "probabilistic",
+            "reply_only"
+          ]
+        },
+        "reply_probability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.0
+        }
+      }
+    },
+
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sink"],
+      "properties": {
+        "sink": {
+          "type": "string",
+          "enum": ["jsonl"]
+        },
+        "jsonl_path": {
+          "type": "string",
+          "default": "./arbiter-audit.jsonl"
+        },
+        "include_authz_decision": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    }
+  }
+}

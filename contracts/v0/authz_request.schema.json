@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/contracts/v0/authz_request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v","tenant_id","correlation_id","actor","request"],
+  "properties": {
+    "v": { "type": "integer", "const": 0 },
+    "tenant_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "actor": { "$ref": "#/$defs/actor" },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action","resource"],
+      "properties": {
+        "action": { "type": "string" },
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type","id"],
+          "properties": {
+            "type": { "type": "string" },
+            "id": { "type": "string" },
+            "attributes": { "type": "object", "default": {} }
+          }
+        },
+        "context": { "type": "object", "default": {} }
+      }
+    }
+  },
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type","id"],
+      "properties": {
+        "type": { "enum": ["human","service","system"] },
+        "id": { "type": "string" },
+        "roles": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "claims": { "type": "object", "default": {} }
+      }
+    }
+  }
+}

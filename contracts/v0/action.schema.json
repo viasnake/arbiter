@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/contracts/v0/action.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type","action_id"],
+  "properties": {
+    "type": {
+      "enum": [
+        "do_nothing",
+        "request_generation",
+        "send_message",
+        "send_reply"
+      ]
+    },
+    "action_id": { "type": "string", "minLength": 1 },
+    "target": { "type": "object", "default": {} },
+    "payload": { "type": "object", "default": {} }
+  }
+}
