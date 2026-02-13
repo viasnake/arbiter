@@ -37,14 +37,20 @@ Reserved (not implemented in behavior):
 
 ## Quick start
 
+Install toolchain via mise:
+
 ```bash
-cargo run -- serve --config ./config/example-config.yaml
+mise install
+```
+
+```bash
+mise exec -- cargo run -- serve --config ./config/example-config.yaml
 ```
 
 Build a single binary:
 
 ```bash
-cargo build --release
+mise run build
 ./target/release/arbiter serve --config ./config/example-config.yaml
 ```
 
@@ -67,16 +73,17 @@ make ci
 Or run each step directly:
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo build --release
+mise run fmt-check
+mise run lint
+mise run test
+mise run build
 ```
 
 ## CI
 
 GitHub Actions runs format, lint, test, and release build on push and pull request.
 Workflow file: `.github/workflows/ci.yml`.
+Toolchain and task orchestration are managed with `mise.toml`.
 
 ## Design documents
 
