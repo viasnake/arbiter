@@ -38,7 +38,7 @@ Reserved (not implemented in behavior):
 ## Quick start
 
 ```bash
-go run ./cmd/arbiter serve --config ./config/example-config.yaml
+cargo run -- serve --config ./config/example-config.yaml
 ```
 
 Endpoints:
