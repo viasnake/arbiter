@@ -30,6 +30,12 @@ Store support:
 
 Any other `store.type` value is rejected at startup. When `store.type=sqlite`, `store.sqlite_path` is required.
 
+SQLite migration policy (v0.x):
+
+- Startup creates missing tables with `CREATE TABLE IF NOT EXISTS`.
+- Schema evolution is additive-first; destructive migration is deferred until explicit migration tooling is introduced.
+- Upgrades must preserve deterministic behavior and idempotency semantics.
+
 Implemented action types:
 
 - `do_nothing`

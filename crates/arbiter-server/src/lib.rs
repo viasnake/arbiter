@@ -74,7 +74,9 @@ impl AppState {
         };
         Ok(Self {
             authz: Arc::new(AuthzEngine::new(&cfg)?),
-            audit: Arc::new(AuditJsonl::new(&cfg.audit.jsonl_path).await?),
+            audit: Arc::new(
+                AuditJsonl::new(&cfg.audit.jsonl_path, cfg.store.sqlite_path.as_deref()).await?,
+            ),
             store: Arc::new(Mutex::new(store)),
             cfg,
         })
@@ -906,6 +908,7 @@ impl AuthzEngine {
 
 struct AuditJsonl {
     file: Arc<Mutex<tokio::fs::File>>,
+    sqlite: Option<Arc<Mutex<Connection>>>,
 }
 
 #[derive(Serialize)]
@@ -984,15 +987,41 @@ impl AuditRecord {
 }
 
 impl AuditJsonl {
-    async fn new(path: &str) -> Result<Self, String> {
+    async fn new(path: &str, sqlite_path: Option<&str>) -> Result<Self, String> {
         let file = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
             .await
             .map_err(|e| e.to_string())?;
+
+        let sqlite = match sqlite_path {
+            Some(path) => {
+                let conn = Connection::open(path).map_err(|e| e.to_string())?;
+                conn.execute_batch(
+                    "
+                    CREATE TABLE IF NOT EXISTS audit_records (
+                        audit_id TEXT PRIMARY KEY,
+                        tenant_id TEXT NOT NULL,
+                        correlation_id TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        result TEXT NOT NULL,
+                        reason_code TEXT NOT NULL,
+                        ts TEXT NOT NULL,
+                        plan_id TEXT,
+                        record_json TEXT NOT NULL
+                    );
+                    ",
+                )
+                .map_err(|e| e.to_string())?;
+                Some(Arc::new(Mutex::new(conn)))
+            }
+            None => None,
+        };
+
         Ok(Self {
             file: Arc::new(Mutex::new(file)),
+            sqlite,
         })
     }
 
@@ -1002,6 +1031,28 @@ impl AuditJsonl {
             use tokio::io::AsyncWriteExt;
             let _ = file.write_all(line.as_bytes()).await;
             let _ = file.write_all(b"\n").await;
+
+            if let Some(sqlite) = &self.sqlite {
+                let conn = sqlite.lock().await;
+                let _ = conn.execute(
+                    "
+                    INSERT OR REPLACE INTO audit_records
+                    (audit_id, tenant_id, correlation_id, action, result, reason_code, ts, plan_id, record_json)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                    ",
+                    params![
+                        rec.audit_id,
+                        rec.tenant_id,
+                        rec.correlation_id,
+                        rec.action,
+                        rec.result,
+                        rec.reason_code,
+                        rec.ts,
+                        rec.plan_id,
+                        line
+                    ],
+                );
+            }
         }
     }
 }

@@ -3,6 +3,7 @@ use arbiter_server::build_app;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use jsonschema::Validator;
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -381,4 +382,32 @@ async fn sqlite_store_keeps_idempotency_across_app_restart() {
     let p2: Value = serde_json::from_slice(&body2).unwrap();
 
     assert_eq!(p1, p2);
+}
+
+#[tokio::test]
+async fn sqlite_store_persists_audit_records() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let db_path = std::env::temp_dir().join(format!("arbiter-store-audit-{nanos}.db"));
+    let db_path_str = db_path.to_string_lossy().to_string();
+
+    let app = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let event = sample_event("evt-sqlite-audit");
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let conn = Connection::open(db_path).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM audit_records", [], |row| row.get(0))
+        .unwrap();
+    assert!(count >= 1);
 }
