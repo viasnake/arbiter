@@ -82,7 +82,7 @@ impl AppState {
                 .ok_or_else(|| "store.sqlite_path is required for sqlite store".to_string())?;
             StoreBackend::Sqlite(SqliteStore::new(&sqlite_path)?)
         } else {
-            StoreBackend::Memory(MemoryStore::default())
+            StoreBackend::Memory(Box::default())
         };
         Ok(Self {
             authz: Arc::new(AuthzEngine::new(&cfg)?),
@@ -594,7 +594,9 @@ async fn job_state(
     if tenant_id.is_empty() || job_id.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": {"code":"validation_error","message":"tenant_id and job_id are required"}})),
+            Json(
+                json!({"error": {"code":"validation_error","message":"tenant_id and job_id are required"}}),
+            ),
         ));
     }
 
@@ -631,7 +633,9 @@ async fn approval_state(
     if tenant_id.is_empty() || approval_id.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": {"code":"validation_error","message":"tenant_id and approval_id are required"}})),
+            Json(
+                json!({"error": {"code":"validation_error","message":"tenant_id and approval_id are required"}}),
+            ),
         ));
     }
 
@@ -810,7 +814,10 @@ async fn action_results(
         ts: input.ts.clone(),
         provider_message_id: input.provider_message_id.clone(),
         reason_code: input.reason_code.clone(),
-        error: input.error.as_ref().map(|v| serde_json::to_value(v).unwrap_or(Value::Null)),
+        error: input
+            .error
+            .as_ref()
+            .map(|v| serde_json::to_value(v).unwrap_or(Value::Null)),
         idempotency_key,
         payload_json,
         ingested_at: ingested_at.to_rfc3339(),
@@ -909,7 +916,7 @@ struct MemoryStore {
 }
 
 enum StoreBackend {
-    Memory(MemoryStore),
+    Memory(Box<MemoryStore>),
     Sqlite(SqliteStore),
 }
 
@@ -1160,17 +1167,18 @@ impl StoreBackend {
         action_id: &str,
     ) -> Result<Option<ActionContext>, String> {
         match self {
-            StoreBackend::Memory(store) => {
-                Ok(store
-                    .action_index
-                    .get(&action_index_key(tenant_id, action_id))
-                    .cloned())
-            }
+            StoreBackend::Memory(store) => Ok(store
+                .action_index
+                .get(&action_index_key(tenant_id, action_id))
+                .cloned()),
             StoreBackend::Sqlite(store) => store.get_action_context(tenant_id, action_id),
         }
     }
 
-    fn ingest_action_result(&mut self, mut record: ActionResultRecord) -> Result<ActionResultIngest, String> {
+    fn ingest_action_result(
+        &mut self,
+        mut record: ActionResultRecord,
+    ) -> Result<ActionResultIngest, String> {
         let action_key = action_index_key(&record.tenant_id, &record.action_id);
         match self {
             StoreBackend::Memory(store) => {
@@ -1202,7 +1210,9 @@ impl StoreBackend {
             }
             StoreBackend::Sqlite(store) => {
                 if record.action_type.is_none() || record.room_id.is_none() {
-                    if let Some(ctx) = store.get_action_context(&record.tenant_id, &record.action_id)? {
+                    if let Some(ctx) =
+                        store.get_action_context(&record.tenant_id, &record.action_id)?
+                    {
                         record.action_type = Some(ctx.action_type);
                         record.room_id = Some(ctx.room_id);
                     }
@@ -1700,8 +1710,13 @@ impl SqliteStore {
         Ok(())
     }
 
-    fn ingest_action_result(&mut self, record: ActionResultRecord) -> Result<ActionResultIngest, String> {
-        if let Some(existing) = self.get_action_result_by_idempotency(&record.tenant_id, &record.idempotency_key)? {
+    fn ingest_action_result(
+        &mut self,
+        record: ActionResultRecord,
+    ) -> Result<ActionResultIngest, String> {
+        if let Some(existing) =
+            self.get_action_result_by_idempotency(&record.tenant_id, &record.idempotency_key)?
+        {
             if existing.payload_json == record.payload_json {
                 return Ok(ActionResultIngest::Duplicate(existing));
             }
@@ -1710,7 +1725,9 @@ impl SqliteStore {
             ));
         }
 
-        if let Some(existing) = self.get_action_result_by_action(&record.tenant_id, &record.action_id)? {
+        if let Some(existing) =
+            self.get_action_result_by_action(&record.tenant_id, &record.action_id)?
+        {
             if existing.payload_json == record.payload_json {
                 return Ok(ActionResultIngest::Duplicate(existing));
             }
@@ -2246,7 +2263,10 @@ fn schema_enum_values(schema_name: &str, path: &str) -> Result<Vec<String>, Stri
 
 fn embedded_contract_schemas() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("action", include_str!("../../../contracts/v1/action.schema.json")),
+        (
+            "action",
+            include_str!("../../../contracts/v1/action.schema.json"),
+        ),
         (
             "action_result",
             include_str!("../../../contracts/v1/action_result.schema.json"),
@@ -2263,7 +2283,10 @@ fn embedded_contract_schemas() -> Vec<(&'static str, &'static str)> {
             "authz_request",
             include_str!("../../../contracts/v1/authz_request.schema.json"),
         ),
-        ("event", include_str!("../../../contracts/v1/event.schema.json")),
+        (
+            "event",
+            include_str!("../../../contracts/v1/event.schema.json"),
+        ),
         (
             "generation_result",
             include_str!("../../../contracts/v1/generation_result.schema.json"),
