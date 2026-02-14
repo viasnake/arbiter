@@ -81,11 +81,10 @@ impl AppState {
         let store = match cfg.store.kind.as_str() {
             "memory" => StoreBackend::Memory(Box::default()),
             "sqlite" => {
-                let sqlite_path = cfg
-                    .store
-                    .sqlite_path
-                    .clone()
-                    .ok_or_else(|| "store.sqlite_path is required for sqlite store".to_string())?;
+                let sqlite_path =
+                    cfg.store.sqlite_path.clone().ok_or_else(|| {
+                        "store.sqlite_path is required for sqlite store".to_string()
+                    })?;
                 StoreBackend::Sqlite(SqliteStore::new(&sqlite_path)?)
             }
             _ => {
@@ -792,7 +791,11 @@ async fn events(
     State(state): State<AppState>,
     Json(event): Json<Event>,
 ) -> Result<Json<ResponsePlan>, (StatusCode, Json<Value>)> {
-    state.process_event(event).await.map(Json).map_err(api_error)
+    state
+        .process_event(event)
+        .await
+        .map(Json)
+        .map_err(api_error)
 }
 
 async fn generations(
