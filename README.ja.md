@@ -170,10 +170,10 @@ mise run ci
 
 ## リリース自動化
 
-- SemVer タグ（例: `v1.1.0`）を push すると release workflow が起動します。
+- SemVer タグ（例: `v1.1.1`）を push すると release workflow が起動します。
 - 公開前に tag/Cargo/OpenAPI のバージョン整合を検証します。
 - GitHub Release notes は自動生成され、バイナリと checksum を添付します。
-- 変更履歴とリリーススコープ: `CHANGELOG.md`, `docs/releases/v1.1.0.md`
+- 変更履歴とリリーススコープ: `CHANGELOG.md`, `docs/releases/v1.1.1.md`
 
 ## 運用
 
@@ -185,7 +185,7 @@ mise run ci
 - 監査 mirror セマンティクス: `docs/audit-mirror.md`
 - Contracts メタデータ生成: `docs/contracts-metadata.md`
 - Contracts endpoint セマンティクス: `docs/contracts-endpoint.md`
-- リリーススコープ（v1.1.0）: `docs/releases/v1.1.0.md`
+- リリーススコープ（v1.1.1）: `docs/releases/v1.1.1.md`
 
 ## 設計ドキュメント
 

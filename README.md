@@ -170,10 +170,10 @@ mise run ci
 
 ## Release automation
 
-- Push a SemVer tag (for example, `v1.1.0`) to trigger the release workflow.
+- Push a SemVer tag (for example, `v1.1.1`) to trigger the release workflow.
 - CI validates tag/Cargo/OpenAPI version consistency before publishing.
 - GitHub Release notes are generated automatically and include attached binary/checksum artifacts.
-- Changelog and release scope: `CHANGELOG.md`, `docs/releases/v1.1.0.md`
+- Changelog and release scope: `CHANGELOG.md`, `docs/releases/v1.1.1.md`
 
 ## Operations
 
@@ -185,7 +185,7 @@ mise run ci
 - Audit mirror semantics: `docs/audit-mirror.md`
 - Contracts metadata generation: `docs/contracts-metadata.md`
 - Contracts endpoint semantics: `docs/contracts-endpoint.md`
-- Release scope (v1.1.0): `docs/releases/v1.1.0.md`
+- Release scope (v1.1.1): `docs/releases/v1.1.1.md`
 
 ## Design documents
 
