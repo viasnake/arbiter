@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Arbiter API
-  version: 1.1.1
+  version: 1.2.0
 servers:
   - url: http://localhost:8080
 paths:
@@ -13,275 +13,106 @@ paths:
           description: OK
           content:
             text/plain:
-              schema: { type: string }
+              schema:
+                type: string
 
   /v1/contracts:
     get:
-      summary: Contracts metadata (versions, action registry)
+      summary: Contracts and governance discovery
       responses:
         "200":
-          description: Metadata
+          description: Contracts metadata
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ContractsMetadata" }
-
-  /v1/jobs/{tenant_id}/{job_id}:
-    get:
-      summary: Get latest job state
-      parameters:
-        - name: tenant_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: job_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: Job state
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/StateResponse" }
-        "404":
-          description: Not found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /v1/approvals/{tenant_id}/{approval_id}:
-    get:
-      summary: Get latest approval state
-      parameters:
-        - name: tenant_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: approval_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: Approval state
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/StateResponse" }
-        "404":
-          description: Not found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                $ref: "#/components/schemas/ContractsMetadata"
 
   /v1/events:
     post:
-      summary: Submit Event
-      description: Returns a deterministic ResponsePlan. Gate/AuthZ denials are represented as do_nothing action.
+      summary: Submit provider-agnostic event envelope
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Event" }
+            schema:
+              $ref: "#/components/schemas/Event"
       responses:
         "200":
-          description: ResponsePlan
+          description: Generated plan envelope
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ResponsePlan" }
+              schema:
+                $ref: "#/components/schemas/Plan"
         "400":
-          description: Invalid request payload
+          description: Invalid request or policy rejection
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /v1/generations:
-    post:
-      summary: Submit GenerationResult
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/GenerationResult" }
-      responses:
-        "200":
-          description: ResponsePlan
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Idempotency payload mismatch
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ResponsePlan" }
-        "400":
-          description: Invalid request payload
-          content:
-            application/json:
-                schema: { $ref: "#/components/schemas/Error" }
-
-  /v1/job-events:
-    post:
-      summary: Submit job lifecycle status event
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/JobStatusEvent" }
-      responses:
-        "200":
-          description: ResponsePlan
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ResponsePlan" }
-        "400":
-          description: Invalid request payload
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /v1/job-cancel:
-    post:
-      summary: Submit job cancellation request event
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/JobCancelRequest" }
-      responses:
-        "200":
-          description: ResponsePlan
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ResponsePlan" }
-        "400":
-          description: Invalid request payload
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/approval-events:
     post:
-      summary: Submit approval workflow event
+      summary: Submit approval lifecycle event
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ApprovalEvent" }
+            schema:
+              $ref: "#/components/schemas/ApprovalEvent"
       responses:
-        "200":
-          description: ResponsePlan
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ResponsePlan" }
+        "204":
+          description: Accepted
         "400":
           description: Invalid request payload
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/action-results:
     post:
-      summary: Report action execution result (action execution result reporting)
+      summary: Submit action execution result
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ActionResult" }
+            schema:
+              $ref: "#/components/schemas/ActionResult"
       responses:
         "204":
-          description: No Content
+          description: Accepted
         "400":
           description: Invalid request payload
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
-          description: Conflict (duplicate key payload mismatch or invalid state transition)
+          description: Idempotency payload mismatch
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /v1/action-results/{tenant_id}/{plan_id}/{action_id}:
-    get:
-      summary: Get latest action execution result
-      parameters:
-        - name: tenant_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: plan_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: action_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: ActionResult
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ActionResult" }
-        "404":
-          description: Not found
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                $ref: "#/components/schemas/Error"
 
 components:
   schemas:
-    Event: { $ref: "../contracts/v1/event.schema.json" }
-    Action: { $ref: "../contracts/v1/action.schema.json" }
-    ResponsePlan: { $ref: "../contracts/v1/response_plan.schema.json" }
-    GenerationResult: { $ref: "../contracts/v1/generation_result.schema.json" }
-    JobStatusEvent: { $ref: "../contracts/v1/job_status_event.schema.json" }
-    JobCancelRequest: { $ref: "../contracts/v1/job_cancel_request.schema.json" }
-    ApprovalEvent: { $ref: "../contracts/v1/approval_event.schema.json" }
-    ActionResult: { $ref: "../contracts/v1/action_result.schema.json" }
-
-    Error:
-      type: object
-      additionalProperties: false
-      required: [error]
-      properties:
-        error:
-          type: object
-          additionalProperties: false
-          required: [code, message]
-          properties:
-            code: { type: string }
-            message: { type: string }
-
-    StateResponse:
-      type: object
-      additionalProperties: false
-      required: [id, tenant_id, status, updated_at]
-      properties:
-        id: { type: string }
-        tenant_id: { type: string }
-        status: { type: string }
-        reason_code: { anyOf: [{ type: string }, { type: "null" }] }
-        updated_at: { type: string, format: date-time }
-
+    Event:
+      $ref: "../contracts/v1/ops.event.schema.json"
+    Action:
+      $ref: "../contracts/v1/ops.action.schema.json"
+    Plan:
+      $ref: "../contracts/v1/ops.plan.schema.json"
+    ApprovalEvent:
+      $ref: "../contracts/v1/ops.approval_event.schema.json"
+    ActionResult:
+      $ref: "../contracts/v1/ops.action_result.schema.json"
     ContractsMetadata:
-      type: object
-      additionalProperties: false
-      required: [version, openapi_sha256, contracts_set_sha256, generated_at, actions, inputs, schemas]
-      properties:
-        version: { type: string }
-        openapi_sha256: { type: string }
-        contracts_set_sha256: { type: string }
-        generated_at: { type: string }
-        actions:
-          type: object
-          additionalProperties: false
-          required: [enabled, reserved]
-          properties:
-            enabled: { type: array, items: { type: string } }
-            reserved: { type: array, items: { type: string } }
-        inputs:
-          type: object
-          additionalProperties: false
-          required: [job_events, approval_events]
-          properties:
-            job_events: { type: array, items: { type: string } }
-            approval_events: { type: array, items: { type: string } }
-        schemas:
-          type: object
-          additionalProperties: { type: string }
+      $ref: "../contracts/v1/ops.contracts_metadata.schema.json"
+    Error:
+      $ref: "../contracts/v1/ops.errors.schema.json"
