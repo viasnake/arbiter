@@ -214,6 +214,50 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn openapi_uses_contract_files_as_schema_source() {
+        let openapi_path = repo_path("openapi/v1.yaml");
+        let openapi_text = std::fs::read_to_string(&openapi_path).unwrap();
+        let openapi: serde_yaml::Value = serde_yaml::from_str(&openapi_text).unwrap();
+        let schemas = openapi
+            .get("components")
+            .and_then(|v| v.get("schemas"))
+            .and_then(|v| v.as_mapping())
+            .unwrap();
+
+        let expected_refs = [
+            ("Event", "../contracts/v1/event.schema.json"),
+            ("Action", "../contracts/v1/action.schema.json"),
+            ("ResponsePlan", "../contracts/v1/response_plan.schema.json"),
+            (
+                "GenerationResult",
+                "../contracts/v1/generation_result.schema.json",
+            ),
+            (
+                "JobStatusEvent",
+                "../contracts/v1/job_status_event.schema.json",
+            ),
+            (
+                "JobCancelRequest",
+                "../contracts/v1/job_cancel_request.schema.json",
+            ),
+            (
+                "ApprovalEvent",
+                "../contracts/v1/approval_event.schema.json",
+            ),
+            ("ActionResult", "../contracts/v1/action_result.schema.json"),
+        ];
+
+        for (schema_name, expected_ref) in expected_refs {
+            let schema_entry = schemas
+                .get(&serde_yaml::Value::String(schema_name.to_string()))
+                .unwrap();
+            let actual_ref = schema_entry.get("$ref").and_then(|v| v.as_str()).unwrap();
+            assert_eq!(actual_ref, expected_ref);
+            assert!(openapi_path.parent().unwrap().join(actual_ref).exists());
+        }
+    }
+
+    #[test]
     fn rust_contract_samples_match_json_schemas() {
         let event_validator = schema_validator("contracts/v1/event.schema.json");
         let action_schema_text =

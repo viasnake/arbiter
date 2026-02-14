@@ -9,3 +9,4 @@ serde_json = "1.0.145"
 
 [dev-dependencies]
 jsonschema = "0.37.1"
+serde_yaml = "0.9.34"
