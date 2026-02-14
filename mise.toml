@@ -21,10 +21,14 @@ run = "cargo test --workspace"
 description = "Verify OpenAPI and contract schema linkage"
 run = "cargo test -p arbiter-contracts"
 
+[tasks.drift-guard]
+description = "Guard OpenAPI refs and schema compilation drift"
+run = "cargo test -p arbiter-contracts"
+
 [tasks.build]
 description = "Build release binary"
 run = "cargo build --release"
 
 [tasks.ci]
 description = "Run full local CI pipeline"
-depends = ["fmt-check", "lint", "contracts-verify", "test", "build"]
+depends = ["fmt-check", "lint", "drift-guard", "contracts-verify", "test", "build"]

@@ -29,6 +29,9 @@ jobs:
       - name: Contracts verify
         run: mise run contracts-verify
 
+      - name: Drift guard
+        run: mise run drift-guard
+
       - name: Test
         run: mise run test
 
