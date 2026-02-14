@@ -139,3 +139,139 @@ pub struct AuthZDecision {
     pub obligations: serde_json::Map<String, Value>,
     pub ttl_ms: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonschema::Validator;
+    use serde_json::{json, Value};
+    use std::path::PathBuf;
+
+    #[test]
+    fn rust_contract_samples_match_json_schemas() {
+        let event_validator = schema_validator("contracts/v0/event.schema.json");
+        let action_schema_text =
+            std::fs::read_to_string(repo_path("contracts/v0/action.schema.json")).unwrap();
+        let action_schema: Value = serde_json::from_str(&action_schema_text).unwrap();
+        let mut plan_schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(repo_path("contracts/v0/response_plan.schema.json")).unwrap(),
+        )
+        .unwrap();
+        plan_schema["properties"]["actions"]["items"]["$ref"] =
+            Value::String("#/$defs/action".to_string());
+        plan_schema["$defs"] = json!({"action": action_schema});
+        let plan_validator = jsonschema::validator_for(&plan_schema).unwrap();
+        let authz_validator = schema_validator("contracts/v0/authz_decision.schema.json");
+
+        let event = Event {
+            v: CONTRACT_VERSION,
+            event_id: "evt-1".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            source: "slack".to_string(),
+            room_id: "room-1".to_string(),
+            actor: Actor {
+                actor_type: "human".to_string(),
+                id: "user-1".to_string(),
+                roles: vec!["member".to_string()],
+                claims: serde_json::Map::new(),
+            },
+            content: EventContent {
+                content_type: "text".to_string(),
+                text: "hello".to_string(),
+                reply_to: None,
+            },
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            extensions: serde_json::Map::new(),
+        };
+
+        let plan = ResponsePlan {
+            v: CONTRACT_VERSION,
+            plan_id: "plan_1".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            room_id: "room-1".to_string(),
+            actions: vec![Action {
+                action_type: ActionType::DoNothing,
+                action_id: "act_1".to_string(),
+                target: serde_json::Map::new(),
+                payload: {
+                    let mut p = serde_json::Map::new();
+                    p.insert("reason_code".to_string(), Value::String("test".to_string()));
+                    p
+                },
+            }],
+            policy_decisions: vec![],
+            debug: serde_json::Map::new(),
+        };
+
+        let decision = AuthZDecision {
+            v: CONTRACT_VERSION,
+            decision: "allow".to_string(),
+            reason_code: "ok".to_string(),
+            policy_version: "policy:v1".to_string(),
+            obligations: serde_json::Map::new(),
+            ttl_ms: 1000,
+        };
+
+        assert!(event_validator
+            .validate(&serde_json::to_value(event).unwrap())
+            .is_ok());
+        assert!(plan_validator
+            .validate(&serde_json::to_value(plan).unwrap())
+            .is_ok());
+        assert!(authz_validator
+            .validate(&serde_json::to_value(decision).unwrap())
+            .is_ok());
+    }
+
+    #[test]
+    fn action_type_enum_matches_action_schema() {
+        let schema: Value = serde_json::from_str(
+            &std::fs::read_to_string(repo_path("contracts/v0/action.schema.json")).unwrap(),
+        )
+        .unwrap();
+        let schema_values = schema["properties"]["type"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+
+        let rust_values = vec![
+            serde_json::to_value(ActionType::DoNothing)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+            serde_json::to_value(ActionType::RequestGeneration)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+            serde_json::to_value(ActionType::SendMessage)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+            serde_json::to_value(ActionType::SendReply)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ];
+
+        assert_eq!(rust_values, schema_values);
+    }
+
+    fn schema_validator(relative: &str) -> Validator {
+        let text = std::fs::read_to_string(repo_path(relative)).unwrap();
+        let schema: Value = serde_json::from_str(&text).unwrap();
+        jsonschema::validator_for(&schema).unwrap()
+    }
+
+    fn repo_path(relative: &str) -> PathBuf {
+        let mut base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        base.push("../..");
+        base.push(relative);
+        base
+    }
+}
