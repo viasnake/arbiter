@@ -249,7 +249,7 @@ mod tests {
 
         for (schema_name, expected_ref) in expected_refs {
             let schema_entry = schemas
-                .get(&serde_yaml::Value::String(schema_name.to_string()))
+                .get(serde_yaml::Value::String(schema_name.to_string()))
                 .unwrap();
             let actual_ref = schema_entry.get("$ref").and_then(|v| v.as_str()).unwrap();
             assert_eq!(actual_ref, expected_ref);

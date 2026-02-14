@@ -609,7 +609,10 @@ async fn sqlite_store_persists_room_state_across_app_restart() {
     let plan2: Value = serde_json::from_slice(&body2).unwrap();
 
     assert_eq!(plan2["actions"][0]["type"], "do_nothing");
-    assert_eq!(plan2["actions"][0]["payload"]["reason_code"], "gate_cooldown");
+    assert_eq!(
+        plan2["actions"][0]["payload"]["reason_code"],
+        "gate_cooldown"
+    );
 }
 
 #[tokio::test]

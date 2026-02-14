@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use arbiter_config::Config;
 use arbiter_contracts::{
-    Action, ActionType, ApprovalEvent, AuthZDecision, AuthZReqData, AuthZRequest, AuthZResource,
-    ActionResult, Event, GenerationResult, JobCancelRequest, JobStatusEvent, ResponsePlan,
+    Action, ActionResult, ActionType, ApprovalEvent, AuthZDecision, AuthZReqData, AuthZRequest,
+    AuthZResource, Event, GenerationResult, JobCancelRequest, JobStatusEvent, ResponsePlan,
     CONTRACT_VERSION,
 };
 use arbiter_kernel::{
