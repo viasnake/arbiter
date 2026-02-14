@@ -120,3 +120,5 @@ not on implementation internals.
 - `docs/operational-philosophy.md`
 - `docs/extensibility-roadmap.md`
 - `docs/contracts-intent.md`
+- `docs/slo.md`
+- `docs/runbook.md`
