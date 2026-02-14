@@ -10,7 +10,8 @@ use arbiter_contracts::{
 };
 use arbiter_kernel::{
     decide_intent, do_nothing_plan, evaluate_gate, minute_bucket, parse_event_ts,
-    request_generation_plan, send_plan, GateConfig, GateDecision, Intent, PlannerConfig, RoomState,
+    planner_probability, planner_seed, request_generation_plan, send_plan, GateConfig,
+    GateDecision, Intent, PlannerConfig, RoomState,
 };
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -91,8 +92,8 @@ impl AppState {
             return Ok(existing);
         }
 
-        let event_ts =
-            parse_event_ts(&event.ts).ok_or_else(|| "invalid ts (RFC3339 required)".to_string())?;
+        parse_event_ts(&event.ts).ok_or_else(|| "invalid ts (RFC3339 required)".to_string())?;
+        let server_now = Utc::now();
 
         let mut store = self.store.lock().await;
         let room_key = room_key(&event.tenant_id, &event.room_id);
@@ -100,7 +101,7 @@ impl AppState {
         let tenant_count = store
             .tenant_rate
             .get(&event.tenant_id)
-            .and_then(|m| m.get(&minute_bucket(event_ts)))
+            .and_then(|m| m.get(&minute_bucket(server_now)))
             .copied()
             .unwrap_or(0);
 
@@ -110,7 +111,7 @@ impl AppState {
             tenant_rate_limit_per_min: self.cfg.gate.tenant_rate_limit_per_min,
         };
         if let GateDecision::Deny { reason_code } =
-            evaluate_gate(&room, event_ts, &gate_cfg, tenant_count)
+            evaluate_gate(&room, server_now, &gate_cfg, tenant_count)
         {
             let plan = do_nothing_plan(
                 &event.tenant_id,
@@ -124,14 +125,24 @@ impl AppState {
             drop(store);
 
             self.audit
-                .append(AuditRecord::new(
-                    &event.tenant_id,
-                    &event.event_id,
-                    "gate",
-                    "deny",
-                    reason_code,
-                    Some(plan.plan_id.clone()),
-                ))
+                .append(
+                    AuditRecord::new(
+                        &event.tenant_id,
+                        &event.event_id,
+                        "gate",
+                        "deny",
+                        reason_code,
+                        Some(plan.plan_id.clone()),
+                    )
+                    .with_trace(DecisionTrace {
+                        gate: Some(StageDecision {
+                            result: "deny".to_string(),
+                            reason_code: reason_code.to_string(),
+                        }),
+                        authz: None,
+                        planner: None,
+                    }),
+                )
                 .await;
             return Ok(plan);
         }
@@ -152,14 +163,32 @@ impl AppState {
             drop(store);
 
             self.audit
-                .append(AuditRecord::new(
-                    &event.tenant_id,
-                    &event.event_id,
-                    "authz",
-                    "deny",
-                    &authz.reason_code,
-                    Some(plan.plan_id.clone()),
-                ))
+                .append(
+                    AuditRecord::new(
+                        &event.tenant_id,
+                        &event.event_id,
+                        "authz",
+                        "deny",
+                        &authz.reason_code,
+                        Some(plan.plan_id.clone()),
+                    )
+                    .with_trace(DecisionTrace {
+                        gate: Some(StageDecision {
+                            result: "allow".to_string(),
+                            reason_code: "gate_allow".to_string(),
+                        }),
+                        authz: if self.cfg.audit.include_authz_decision {
+                            Some(AuthzDecisionTrace {
+                                result: "deny".to_string(),
+                                reason_code: authz.reason_code.clone(),
+                                policy_version: authz.policy_version.clone(),
+                            })
+                        } else {
+                            None
+                        },
+                        planner: None,
+                    }),
+                )
                 .await;
             return Ok(plan);
         }
@@ -169,6 +198,8 @@ impl AppState {
             reply_probability: self.cfg.planner.reply_probability,
         };
         let intent = decide_intent(&event, &planner_cfg);
+        let planner_seed = planner_seed(&event.event_id);
+        let sampled_probability = planner_probability(&event.event_id);
 
         let plan = match intent {
             Intent::Ignore => do_nothing_plan(
@@ -206,7 +237,7 @@ impl AppState {
             .tenant_rate
             .entry(event.tenant_id.clone())
             .or_default()
-            .entry(minute_bucket(event_ts))
+            .entry(minute_bucket(server_now))
             .and_modify(|v| *v += 1)
             .or_insert(1);
 
@@ -216,14 +247,37 @@ impl AppState {
         drop(store);
 
         self.audit
-            .append(AuditRecord::new(
-                &event.tenant_id,
-                &event.event_id,
-                "process_event",
-                "ok",
-                action_name(&plan.actions[0]),
-                Some(plan.plan_id.clone()),
-            ))
+            .append(
+                AuditRecord::new(
+                    &event.tenant_id,
+                    &event.event_id,
+                    "process_event",
+                    "ok",
+                    action_name(&plan.actions[0]),
+                    Some(plan.plan_id.clone()),
+                )
+                .with_trace(DecisionTrace {
+                    gate: Some(StageDecision {
+                        result: "allow".to_string(),
+                        reason_code: "gate_allow".to_string(),
+                    }),
+                    authz: if self.cfg.audit.include_authz_decision {
+                        Some(AuthzDecisionTrace {
+                            result: "allow".to_string(),
+                            reason_code: authz.reason_code.clone(),
+                            policy_version: authz.policy_version.clone(),
+                        })
+                    } else {
+                        None
+                    },
+                    planner: Some(PlannerDecisionTrace {
+                        reply_policy: planner_cfg.reply_policy,
+                        chosen_intent: intent_name(intent).to_string(),
+                        seed: planner_seed,
+                        sampled_probability,
+                    }),
+                }),
+            )
             .await;
         Ok(plan)
     }
@@ -393,6 +447,7 @@ struct PendingGeneration {
 struct AuthzOutcome {
     allow: bool,
     reason_code: String,
+    policy_version: Option<String>,
 }
 
 struct AuthzEngine {
@@ -436,6 +491,7 @@ impl AuthzEngine {
             return AuthzOutcome {
                 allow: true,
                 reason_code: "builtin_allow_all".to_string(),
+                policy_version: Some("builtin:v0".to_string()),
             };
         }
 
@@ -507,6 +563,7 @@ impl AuthzEngine {
             } else {
                 decision.reason_code
             },
+            policy_version: Some(decision.policy_version),
         };
 
         if self.cache_enabled {
@@ -535,14 +592,17 @@ impl AuthzEngine {
             "allow" => AuthzOutcome {
                 allow: true,
                 reason_code: "authz_error_allow".to_string(),
+                policy_version: None,
             },
             "fallback_builtin" => AuthzOutcome {
                 allow: true,
                 reason_code: "authz_error_fallback_builtin".to_string(),
+                policy_version: Some("builtin:fallback".to_string()),
             },
             _ => AuthzOutcome {
                 allow: false,
                 reason_code: "authz_error_deny".to_string(),
+                policy_version: None,
             },
         }
     }
@@ -563,6 +623,40 @@ struct AuditRecord {
     ts: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision_trace: Option<DecisionTrace>,
+}
+
+#[derive(Serialize)]
+struct DecisionTrace {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gate: Option<StageDecision>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authz: Option<AuthzDecisionTrace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    planner: Option<PlannerDecisionTrace>,
+}
+
+#[derive(Serialize)]
+struct StageDecision {
+    result: String,
+    reason_code: String,
+}
+
+#[derive(Serialize)]
+struct AuthzDecisionTrace {
+    result: String,
+    reason_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_version: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PlannerDecisionTrace {
+    reply_policy: String,
+    chosen_intent: String,
+    seed: u64,
+    sampled_probability: f64,
 }
 
 impl AuditRecord {
@@ -583,7 +677,13 @@ impl AuditRecord {
             reason_code: reason_code.to_string(),
             ts: Utc::now().to_rfc3339(),
             plan_id,
+            decision_trace: None,
         }
+    }
+
+    fn with_trace(mut self, trace: DecisionTrace) -> Self {
+        self.decision_trace = Some(trace);
+        self
     }
 }
 
@@ -653,6 +753,14 @@ fn action_name(a: &Action) -> &'static str {
         ActionType::SendReply => "send_reply",
         ActionType::StartAgentJob => "start_agent_job",
         ActionType::RequestApproval => "request_approval",
+    }
+}
+
+fn intent_name(intent: Intent) -> &'static str {
+    match intent {
+        Intent::Ignore => "IGNORE",
+        Intent::Reply => "REPLY",
+        Intent::Message => "MESSAGE",
     }
 }
 

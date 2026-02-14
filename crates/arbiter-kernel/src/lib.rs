@@ -40,7 +40,7 @@ pub enum Intent {
 
 pub fn evaluate_gate(
     room: &RoomState,
-    event_ts: DateTime<Utc>,
+    server_now: DateTime<Utc>,
     cfg: &GateConfig,
     tenant_count: usize,
 ) -> GateDecision {
@@ -52,7 +52,7 @@ pub fn evaluate_gate(
 
     if cfg.cooldown_ms > 0 {
         if let Some(last_send_at) = room.last_send_at {
-            let elapsed = event_ts.signed_duration_since(last_send_at);
+            let elapsed = server_now.signed_duration_since(last_send_at);
             if elapsed.num_milliseconds() < cfg.cooldown_ms as i64 {
                 return GateDecision::Deny {
                     reason_code: "gate_cooldown",
@@ -99,14 +99,14 @@ pub fn decide_intent(event: &Event, cfg: &PlannerConfig) -> Intent {
         "mention_first" => {
             if mentioned {
                 Intent::Reply
-            } else if seeded_probability(&event.event_id) < cfg.reply_probability {
+            } else if planner_probability(&event.event_id) < cfg.reply_probability {
                 Intent::Message
             } else {
                 Intent::Ignore
             }
         }
         "probabilistic" => {
-            if seeded_probability(&event.event_id) < cfg.reply_probability {
+            if planner_probability(&event.event_id) < cfg.reply_probability {
                 Intent::Message
             } else {
                 Intent::Ignore
@@ -288,14 +288,17 @@ pub fn action_id(plan_id: &str, action_type: &str, index: usize) -> String {
     format!("act_{}", hex_prefix(&digest))
 }
 
-fn seeded_probability(event_id: &str) -> f64 {
+pub fn planner_seed(event_id: &str) -> u64 {
     let mut hasher = Sha256::new();
     hasher.update(event_id.as_bytes());
     let digest = hasher.finalize();
-    let n = u64::from_be_bytes([
+    u64::from_be_bytes([
         digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-    ]);
-    (n % 10_000) as f64 / 10_000.0
+    ])
+}
+
+pub fn planner_probability(event_id: &str) -> f64 {
+    (planner_seed(event_id) % 10_000) as f64 / 10_000.0
 }
 
 fn hex_prefix(bytes: &[u8]) -> String {

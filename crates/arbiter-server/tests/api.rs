@@ -5,9 +5,19 @@ use axum::http::{Request, StatusCode};
 use jsonschema::Validator;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tower::util::ServiceExt;
 
 fn test_config() -> Config {
+    test_config_with_authz_audit(true)
+}
+
+fn test_config_with_authz_audit(include_authz_decision: bool) -> Config {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let audit_path = std::env::temp_dir().join(format!("arbiter-audit-{nanos}.jsonl"));
     Config {
         server: Server {
             listen_addr: "127.0.0.1:0".to_string(),
@@ -38,8 +48,8 @@ fn test_config() -> Config {
         },
         audit: Audit {
             sink: "jsonl".to_string(),
-            jsonl_path: format!("{}/audit.jsonl", std::env::temp_dir().to_string_lossy()),
-            include_authz_decision: true,
+            jsonl_path: audit_path.to_string_lossy().to_string(),
+            include_authz_decision,
         },
     }
 }
@@ -210,4 +220,116 @@ fn repo_path(relative: &str) -> PathBuf {
     base.push("../..");
     base.push(relative);
     base
+}
+
+#[tokio::test]
+async fn audit_trace_includes_authz_when_enabled() {
+    let cfg = test_config_with_authz_audit(true);
+    let audit_path = cfg.audit.jsonl_path.clone();
+    let app = build_app(cfg).await.unwrap();
+    let event = sample_event("evt-audit-enabled");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let audit_text = std::fs::read_to_string(audit_path).unwrap();
+    let last_line = audit_text.lines().last().unwrap();
+    let rec: Value = serde_json::from_str(last_line).unwrap();
+    assert!(rec["decision_trace"]["authz"].is_object());
+    assert_eq!(rec["decision_trace"]["authz"]["result"], "allow");
+    assert!(rec["decision_trace"]["planner"]["seed"].is_number());
+}
+
+#[tokio::test]
+async fn audit_trace_omits_authz_when_disabled() {
+    let cfg = test_config_with_authz_audit(false);
+    let audit_path = cfg.audit.jsonl_path.clone();
+    let app = build_app(cfg).await.unwrap();
+    let event = sample_event("evt-audit-disabled");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let audit_text = std::fs::read_to_string(audit_path).unwrap();
+    let last_line = audit_text.lines().last().unwrap();
+    let rec: Value = serde_json::from_str(last_line).unwrap();
+    assert!(rec["decision_trace"]["authz"].is_null());
+}
+
+#[tokio::test]
+async fn cooldown_uses_server_time_even_when_event_ts_is_future_or_past() {
+    let mut cfg = test_config();
+    cfg.gate.cooldown_ms = 60_000;
+    let app = build_app(cfg).await.unwrap();
+
+    let first_event = sample_event("evt-cooldown-1");
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(first_event.to_string()))
+        .unwrap();
+    let res1 = app.clone().oneshot(req1).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+    let body1 = axum::body::to_bytes(res1.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan1: Value = serde_json::from_slice(&body1).unwrap();
+    let action_id = plan1["actions"][0]["action_id"].as_str().unwrap();
+    let plan_id = plan1["plan_id"].as_str().unwrap();
+
+    let generation = json!({
+        "v": 0,
+        "plan_id": plan_id,
+        "action_id": action_id,
+        "tenant_id": "tenant-a",
+        "text": "generated"
+    });
+    let gen_req = Request::builder()
+        .method("POST")
+        .uri("/v0/generations")
+        .header("content-type", "application/json")
+        .body(Body::from(generation.to_string()))
+        .unwrap();
+    let gen_res = app.clone().oneshot(gen_req).await.unwrap();
+    assert_eq!(gen_res.status(), StatusCode::OK);
+
+    for (event_id, ts) in [
+        ("evt-cooldown-future", "2099-01-01T00:00:00Z"),
+        ("evt-cooldown-past", "2000-01-01T00:00:00Z"),
+    ] {
+        let mut event = sample_event(event_id);
+        event["ts"] = Value::String(ts.to_string());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v0/events")
+            .header("content-type", "application/json")
+            .body(Body::from(event.to_string()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let plan: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(plan["actions"][0]["type"], "do_nothing");
+        assert_eq!(
+            plan["actions"][0]["payload"]["reason_code"],
+            "gate_cooldown"
+        );
+    }
 }
