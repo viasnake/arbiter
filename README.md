@@ -6,6 +6,8 @@ It does not generate text, execute tools, or run agent loops.
 Its purpose is to decide what should happen next, under explicit policy,
 with auditable and repeatable behavior.
 
+Job and approval lifecycle endpoints also follow this rule: they only update decision state and emit plans; they never execute external work.
+
 ## Why Arbiter exists
 
 Modern AI runtimes mix generation, execution, and policy in one place.
@@ -82,9 +84,18 @@ Endpoints:
 
 - `POST /v0/events`
 - `POST /v0/generations`
+- `POST /v0/job-events`
+- `POST /v0/job-cancel`
+- `POST /v0/approval-events`
 - `POST /v0/action-results`
 - `GET /v0/contracts`
 - `GET /v0/healthz`
+
+Audit chain verification:
+
+```bash
+arbiter audit-verify --path ./arbiter-audit.jsonl
+```
 
 ## Local verification
 
@@ -120,5 +131,7 @@ not on implementation internals.
 - `docs/operational-philosophy.md`
 - `docs/extensibility-roadmap.md`
 - `docs/contracts-intent.md`
+- `docs/contract-compatibility-policy.md`
+- `docs/authz-resilience.md`
 - `docs/slo.md`
 - `docs/runbook.md`

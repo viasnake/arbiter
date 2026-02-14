@@ -26,6 +26,7 @@ Arbiter treats `(tenant_id, event_id)` as the replay boundary to keep response p
 
 Audit logs are operational evidence, not debug convenience.
 Append-only output is required to preserve event chronology.
+When configured, an immutable mirror sink should receive the same append-only records.
 
 ## Observability philosophy
 

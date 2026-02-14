@@ -67,6 +67,30 @@
           "minimum": 1,
           "default": 300
         },
+        "retry_max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "Total attempts for external authz request (including first request)"
+        },
+        "retry_backoff_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Delay between retry attempts"
+        },
+        "circuit_breaker_failures": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5,
+          "description": "Consecutive authz failures needed to open the circuit"
+        },
+        "circuit_breaker_open_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30000,
+          "description": "How long to keep authz circuit open after threshold"
+        },
         "fail_mode": {
           "type": "string",
           "enum": ["deny", "allow", "fallback_builtin"],
@@ -144,6 +168,15 @@
           "minimum": 0,
           "maximum": 1,
           "default": 0.0
+        },
+        "approval_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 900000
+        },
+        "approval_escalation_on_expired": {
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -164,6 +197,10 @@
         "include_authz_decision": {
           "type": "boolean",
           "default": true
+        },
+        "immutable_mirror_path": {
+          "type": "string",
+          "description": "Optional append-only mirror sink path"
         }
       }
     }

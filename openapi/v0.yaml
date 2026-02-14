@@ -66,6 +66,66 @@ paths:
           description: Invalid request payload
           content:
             application/json:
+                schema: { $ref: "#/components/schemas/Error" }
+
+  /v0/job-events:
+    post:
+      summary: Submit job lifecycle status event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JobStatusEvent" }
+      responses:
+        "200":
+          description: ResponsePlan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResponsePlan" }
+        "400":
+          description: Invalid request payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v0/job-cancel:
+    post:
+      summary: Submit job cancellation request event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JobCancelRequest" }
+      responses:
+        "200":
+          description: ResponsePlan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResponsePlan" }
+        "400":
+          description: Invalid request payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v0/approval-events:
+    post:
+      summary: Submit approval workflow event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApprovalEvent" }
+      responses:
+        "200":
+          description: ResponsePlan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResponsePlan" }
+        "400":
+          description: Invalid request payload
+          content:
+            application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
   /v0/action-results:
@@ -131,6 +191,8 @@ components:
               request_generation,
               send_message,
               send_reply,
+              start_agent_job,
+              request_approval,
             ]
         action_id: { type: string, minLength: 1 }
         target: { type: object }
@@ -163,6 +225,44 @@ components:
         tenant_id: { type: string, minLength: 1 }
         text: { type: string }
         trace_id: { anyOf: [{ type: string }, { type: "null" }] }
+
+    JobStatusEvent:
+      type: object
+      additionalProperties: false
+      required: [v, event_id, tenant_id, job_id, status, ts]
+      properties:
+        v: { type: integer, const: 0 }
+        event_id: { type: string, minLength: 1 }
+        tenant_id: { type: string, minLength: 1 }
+        job_id: { type: string, minLength: 1 }
+        status: { enum: [started, heartbeat, completed, failed, cancelled] }
+        ts: { type: string, format: date-time }
+        reason_code: { anyOf: [{ type: string }, { type: "null" }] }
+
+    JobCancelRequest:
+      type: object
+      additionalProperties: false
+      required: [v, event_id, tenant_id, job_id, ts]
+      properties:
+        v: { type: integer, const: 0 }
+        event_id: { type: string, minLength: 1 }
+        tenant_id: { type: string, minLength: 1 }
+        job_id: { type: string, minLength: 1 }
+        ts: { type: string, format: date-time }
+        reason_code: { anyOf: [{ type: string }, { type: "null" }] }
+
+    ApprovalEvent:
+      type: object
+      additionalProperties: false
+      required: [v, event_id, tenant_id, approval_id, status, ts]
+      properties:
+        v: { type: integer, const: 0 }
+        event_id: { type: string, minLength: 1 }
+        tenant_id: { type: string, minLength: 1 }
+        approval_id: { type: string, minLength: 1 }
+        status: { enum: [requested, approved, rejected, expired] }
+        ts: { type: string, format: date-time }
+        reason_code: { anyOf: [{ type: string }, { type: "null" }] }
 
     Error:
       type: object

@@ -140,6 +140,44 @@ pub struct AuthZDecision {
     pub ttl_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobStatusEvent {
+    pub v: i32,
+    pub event_id: String,
+    pub tenant_id: String,
+    pub job_id: String,
+    pub status: String,
+    pub ts: String,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobCancelRequest {
+    pub v: i32,
+    pub event_id: String,
+    pub tenant_id: String,
+    pub job_id: String,
+    pub ts: String,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalEvent {
+    pub v: i32,
+    pub event_id: String,
+    pub tenant_id: String,
+    pub approval_id: String,
+    pub status: String,
+    pub ts: String,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +200,9 @@ mod tests {
         plan_schema["$defs"] = json!({"action": action_schema});
         let plan_validator = jsonschema::validator_for(&plan_schema).unwrap();
         let authz_validator = schema_validator("contracts/v0/authz_decision.schema.json");
+        let job_status_validator = schema_validator("contracts/v0/job_status_event.schema.json");
+        let job_cancel_validator = schema_validator("contracts/v0/job_cancel_request.schema.json");
+        let approval_validator = schema_validator("contracts/v0/approval_event.schema.json");
 
         let event = Event {
             v: CONTRACT_VERSION,
@@ -212,6 +253,35 @@ mod tests {
             ttl_ms: 1000,
         };
 
+        let job_status = JobStatusEvent {
+            v: CONTRACT_VERSION,
+            event_id: "job-evt-1".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            job_id: "job-1".to_string(),
+            status: "started".to_string(),
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            reason_code: None,
+        };
+
+        let job_cancel = JobCancelRequest {
+            v: CONTRACT_VERSION,
+            event_id: "job-cancel-1".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            job_id: "job-1".to_string(),
+            ts: "2026-01-01T00:01:00Z".to_string(),
+            reason_code: Some("user_cancelled".to_string()),
+        };
+
+        let approval = ApprovalEvent {
+            v: CONTRACT_VERSION,
+            event_id: "approval-evt-1".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            approval_id: "apr-1".to_string(),
+            status: "approved".to_string(),
+            ts: "2026-01-01T00:02:00Z".to_string(),
+            reason_code: None,
+        };
+
         assert!(event_validator
             .validate(&serde_json::to_value(event).unwrap())
             .is_ok());
@@ -220,6 +290,15 @@ mod tests {
             .is_ok());
         assert!(authz_validator
             .validate(&serde_json::to_value(decision).unwrap())
+            .is_ok());
+        assert!(job_status_validator
+            .validate(&serde_json::to_value(job_status).unwrap())
+            .is_ok());
+        assert!(job_cancel_validator
+            .validate(&serde_json::to_value(job_cancel).unwrap())
+            .is_ok());
+        assert!(approval_validator
+            .validate(&serde_json::to_value(approval).unwrap())
             .is_ok());
     }
 

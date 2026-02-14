@@ -8,6 +8,10 @@ authz:
   mode: "external_http"
   endpoint: "http://localhost:8081/v0/authorize"
   timeout_ms: 300
+  retry_max_attempts: 2
+  retry_backoff_ms: 100
+  circuit_breaker_failures: 5
+  circuit_breaker_open_ms: 30000
   fail_mode: "deny"
   cache:
     enabled: true
@@ -22,8 +26,11 @@ gate:
 planner:
   reply_policy: "mention_first"
   reply_probability: 0.3
+  approval_timeout_ms: 900000
+  approval_escalation_on_expired: true
 
 audit:
   sink: "jsonl"
   jsonl_path: "./arbiter-audit.jsonl"
   include_authz_decision: true
+  immutable_mirror_path: null

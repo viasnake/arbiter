@@ -1,5 +1,5 @@
 use arbiter_config::{Audit, Authz, AuthzCache, Config, Gate, Planner, Server, Store};
-use arbiter_server::build_app;
+use arbiter_server::{build_app, verify_audit_chain};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::post;
@@ -8,6 +8,8 @@ use jsonschema::Validator;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower::util::ServiceExt;
 
@@ -34,6 +36,10 @@ fn test_config_with_authz_audit(include_authz_decision: bool) -> Config {
             endpoint: None,
             timeout_ms: 100,
             fail_mode: "deny".to_string(),
+            retry_max_attempts: 2,
+            retry_backoff_ms: 0,
+            circuit_breaker_failures: 3,
+            circuit_breaker_open_ms: 3000,
             cache: AuthzCache {
                 enabled: true,
                 ttl_ms: 30000,
@@ -48,11 +54,14 @@ fn test_config_with_authz_audit(include_authz_decision: bool) -> Config {
         planner: Planner {
             reply_policy: "all".to_string(),
             reply_probability: 0.0,
+            approval_timeout_ms: 900000,
+            approval_escalation_on_expired: true,
         },
         audit: Audit {
             sink: "jsonl".to_string(),
             jsonl_path: audit_path.to_string_lossy().to_string(),
             include_authz_decision,
+            immutable_mirror_path: None,
         },
     }
 }
@@ -77,6 +86,67 @@ async fn spawn_mock_authz_invalid_policy_version() -> String {
     }
 
     let app = Router::new().route("/v0/authorize", post(handler));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/v0/authorize")
+}
+
+async fn spawn_mock_authz_flaky_then_allow() -> String {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = Arc::clone(&calls);
+    async fn ok_decision() -> Json<Value> {
+        Json(json!({
+            "v": 0,
+            "decision": "allow",
+            "reason_code": "ok",
+            "policy_version": "policy:v1",
+            "obligations": {},
+            "ttl_ms": 1000
+        }))
+    }
+
+    let app = Router::new().route(
+        "/v0/authorize",
+        post(move || {
+            let calls = Arc::clone(&calls_clone);
+            async move {
+                let n = calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error":"temp"})),
+                    )
+                } else {
+                    (StatusCode::OK, ok_decision().await)
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/v0/authorize")
+}
+
+async fn spawn_mock_authz_always_500(counter: Arc<AtomicUsize>) -> String {
+    let app = Router::new().route(
+        "/v0/authorize",
+        post(move || {
+            let c = Arc::clone(&counter);
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error":"down"})),
+                )
+            }
+        }),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -266,7 +336,7 @@ async fn audit_trace_includes_authz_when_enabled() {
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
-    let res = app.oneshot(req).await.unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -291,7 +361,7 @@ async fn audit_trace_omits_authz_when_disabled() {
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
-    let res = app.oneshot(req).await.unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -424,7 +494,7 @@ async fn sqlite_store_persists_audit_records() {
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
-    let res = app.oneshot(req).await.unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -467,6 +537,61 @@ async fn external_authz_invalid_contract_is_denied_in_fail_closed_mode() {
 }
 
 #[tokio::test]
+async fn external_authz_retries_and_recovers_on_second_attempt() {
+    let endpoint = spawn_mock_authz_flaky_then_allow().await;
+    let mut cfg = test_config();
+    cfg.authz.mode = "external_http".to_string();
+    cfg.authz.endpoint = Some(endpoint);
+    cfg.authz.fail_mode = "deny".to_string();
+    cfg.authz.cache.enabled = false;
+    cfg.authz.retry_max_attempts = 2;
+    cfg.authz.retry_backoff_ms = 0;
+
+    let app = build_app(cfg).await.unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(sample_event("evt-authz-retry").to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: Value = serde_json::from_slice(&body).unwrap();
+    assert_ne!(plan["actions"][0]["type"], "do_nothing");
+}
+
+#[tokio::test]
+async fn external_authz_circuit_breaker_short_circuits_repeated_failures() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let endpoint = spawn_mock_authz_always_500(Arc::clone(&calls)).await;
+    let mut cfg = test_config();
+    cfg.authz.mode = "external_http".to_string();
+    cfg.authz.endpoint = Some(endpoint);
+    cfg.authz.fail_mode = "deny".to_string();
+    cfg.authz.cache.enabled = false;
+    cfg.authz.retry_max_attempts = 1;
+    cfg.authz.circuit_breaker_failures = 1;
+    cfg.authz.circuit_breaker_open_ms = 60_000;
+
+    let app = build_app(cfg).await.unwrap();
+    for event_id in ["evt-authz-cb-1", "evt-authz-cb-2"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v0/events")
+            .header("content-type", "application/json")
+            .body(Body::from(sample_event(event_id).to_string()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn can_choose_start_agent_job_action_via_extension() {
     let app = build_app(test_config()).await.unwrap();
     let mut event = sample_event("evt-job-mode");
@@ -478,13 +603,36 @@ async fn can_choose_start_agent_job_action_via_extension() {
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
-    let res = app.oneshot(req).await.unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let body = axum::body::to_bytes(res.into_body(), usize::MAX)
         .await
         .unwrap();
     let plan: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(plan["actions"][0]["type"], "start_agent_job");
+
+    let generation = json!({
+        "v": 0,
+        "plan_id": plan["plan_id"],
+        "action_id": plan["actions"][0]["action_id"],
+        "tenant_id": "tenant-a",
+        "text": "should not execute"
+    });
+    let gen_req = Request::builder()
+        .method("POST")
+        .uri("/v0/generations")
+        .header("content-type", "application/json")
+        .body(Body::from(generation.to_string()))
+        .unwrap();
+    let gen_res = app.oneshot(gen_req).await.unwrap();
+    let gen_body = axum::body::to_bytes(gen_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let gen_plan: Value = serde_json::from_slice(&gen_body).unwrap();
+    assert_eq!(
+        gen_plan["actions"][0]["payload"]["reason_code"],
+        "generation_unknown_action"
+    );
 }
 
 #[tokio::test]
@@ -537,4 +685,183 @@ async fn audit_jsonl_records_are_hash_chained() {
     let second_prev = second["prev_hash"].as_str().unwrap();
     assert!(!first_hash.is_empty());
     assert_eq!(second_prev, first_hash);
+}
+
+#[tokio::test]
+async fn job_status_event_is_idempotent() {
+    let app = build_app(test_config()).await.unwrap();
+    let payload = json!({
+        "v": 0,
+        "event_id": "job-status-evt-1",
+        "tenant_id": "tenant-a",
+        "job_id": "job-1",
+        "status": "started",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/v0/job-events")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res1 = app.clone().oneshot(req1).await.unwrap();
+    let body1 = axum::body::to_bytes(res1.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let p1: Value = serde_json::from_slice(&body1).unwrap();
+
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/v0/job-events")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res2 = app.oneshot(req2).await.unwrap();
+    let body2 = axum::body::to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let p2: Value = serde_json::from_slice(&body2).unwrap();
+
+    assert_eq!(p1, p2);
+}
+
+#[tokio::test]
+async fn job_cancel_event_is_idempotent() {
+    let app = build_app(test_config()).await.unwrap();
+    let payload = json!({
+        "v": 0,
+        "event_id": "job-cancel-evt-1",
+        "tenant_id": "tenant-a",
+        "job_id": "job-1",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/v0/job-cancel")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res1 = app.clone().oneshot(req1).await.unwrap();
+    let body1 = axum::body::to_bytes(res1.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let p1: Value = serde_json::from_slice(&body1).unwrap();
+
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/v0/job-cancel")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res2 = app.oneshot(req2).await.unwrap();
+    let body2 = axum::body::to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let p2: Value = serde_json::from_slice(&body2).unwrap();
+
+    assert_eq!(p1, p2);
+}
+
+#[tokio::test]
+async fn request_approval_plan_contains_timeout_and_id() {
+    let mut cfg = test_config();
+    cfg.planner.approval_timeout_ms = 60_000;
+    let app = build_app(cfg).await.unwrap();
+    let mut event = sample_event("evt-approval-timeout");
+    event["extensions"] = json!({"arbiter_action":"request_approval"});
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(plan["actions"][0]["type"], "request_approval");
+    assert!(plan["actions"][0]["payload"]["approval_id"].is_string());
+    assert!(plan["actions"][0]["payload"]["expires_at"].is_string());
+}
+
+#[tokio::test]
+async fn approval_expired_event_sets_escalation_debug_field() {
+    let mut cfg = test_config();
+    cfg.planner.approval_escalation_on_expired = true;
+    let app = build_app(cfg).await.unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/approval-events")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "v": 0,
+                "event_id": "approval-expired-1",
+                "tenant_id": "tenant-a",
+                "approval_id": "approval:1",
+                "status": "expired",
+                "ts": "2026-02-14T00:00:00Z"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(plan["debug"]["escalation"], "notify_human");
+}
+
+#[tokio::test]
+async fn immutable_mirror_sink_receives_audit_lines() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let mirror = std::env::temp_dir().join(format!("arbiter-audit-mirror-{nanos}.jsonl"));
+    let mut cfg = test_config();
+    cfg.audit.immutable_mirror_path = Some(mirror.to_string_lossy().to_string());
+
+    let app = build_app(cfg).await.unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(sample_event("evt-mirror").to_string()))
+        .unwrap();
+    let _ = app.oneshot(req).await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let content = std::fs::read_to_string(mirror).unwrap();
+    assert!(!content.trim().is_empty());
+}
+
+#[tokio::test]
+async fn audit_verify_tool_accepts_valid_chain() {
+    let cfg = test_config_with_authz_audit(true);
+    let audit_path = cfg.audit.jsonl_path.clone();
+    let app = build_app(cfg).await.unwrap();
+
+    for event_id in ["evt-verify-1", "evt-verify-2"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v0/events")
+            .header("content-type", "application/json")
+            .body(Body::from(sample_event(event_id).to_string()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let result = verify_audit_chain(&audit_path);
+    assert!(result.is_ok());
 }

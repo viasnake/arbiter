@@ -50,6 +50,14 @@ pub struct Authz {
     pub endpoint: Option<String>,
     pub timeout_ms: i64,
     pub fail_mode: String,
+    #[serde(default = "default_retry_max_attempts")]
+    pub retry_max_attempts: usize,
+    #[serde(default = "default_retry_backoff_ms")]
+    pub retry_backoff_ms: u64,
+    #[serde(default = "default_circuit_breaker_failures")]
+    pub circuit_breaker_failures: u64,
+    #[serde(default = "default_circuit_breaker_open_ms")]
+    pub circuit_breaker_open_ms: u64,
     pub cache: AuthzCache,
 }
 
@@ -64,6 +72,10 @@ pub struct Gate {
 pub struct Planner {
     pub reply_policy: String,
     pub reply_probability: f64,
+    #[serde(default = "default_approval_timeout_ms")]
+    pub approval_timeout_ms: u64,
+    #[serde(default = "default_approval_escalation_on_expired")]
+    pub approval_escalation_on_expired: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +83,32 @@ pub struct Audit {
     pub sink: String,
     pub jsonl_path: String,
     pub include_authz_decision: bool,
+    #[serde(default)]
+    pub immutable_mirror_path: Option<String>,
+}
+
+fn default_retry_max_attempts() -> usize {
+    1
+}
+
+fn default_retry_backoff_ms() -> u64 {
+    0
+}
+
+fn default_circuit_breaker_failures() -> u64 {
+    5
+}
+
+fn default_circuit_breaker_open_ms() -> u64 {
+    30_000
+}
+
+fn default_approval_timeout_ms() -> u64 {
+    15 * 60 * 1000
+}
+
+fn default_approval_escalation_on_expired() -> bool {
+    true
 }
 
 pub fn load_and_validate(path: &str) -> Result<Config, ConfigError> {
@@ -139,6 +177,26 @@ fn validate_runtime_support(cfg: &Config) -> Result<(), ConfigError> {
     {
         return Err(ConfigError::UnsupportedConfig(
             "store.sqlite_path is required when store.type=sqlite".to_string(),
+        ));
+    }
+    if cfg.authz.retry_max_attempts == 0 {
+        return Err(ConfigError::UnsupportedConfig(
+            "authz.retry_max_attempts must be >= 1".to_string(),
+        ));
+    }
+    if cfg.authz.circuit_breaker_failures == 0 {
+        return Err(ConfigError::UnsupportedConfig(
+            "authz.circuit_breaker_failures must be >= 1".to_string(),
+        ));
+    }
+    if cfg.authz.circuit_breaker_open_ms == 0 {
+        return Err(ConfigError::UnsupportedConfig(
+            "authz.circuit_breaker_open_ms must be >= 1".to_string(),
+        ));
+    }
+    if cfg.planner.approval_timeout_ms == 0 {
+        return Err(ConfigError::UnsupportedConfig(
+            "planner.approval_timeout_ms must be >= 1".to_string(),
         ));
     }
     Ok(())

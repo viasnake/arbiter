@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use arbiter_config::Config;
 use arbiter_contracts::{
-    Action, ActionType, AuthZDecision, AuthZReqData, AuthZRequest, AuthZResource, Event,
-    GenerationResult, ResponsePlan, CONTRACT_VERSION,
+    Action, ActionType, ApprovalEvent, AuthZDecision, AuthZReqData, AuthZRequest, AuthZResource,
+    Event, GenerationResult, JobCancelRequest, JobStatusEvent, ResponsePlan, CONTRACT_VERSION,
 };
 use arbiter_kernel::{
     decide_intent, do_nothing_plan, evaluate_gate, minute_bucket, parse_event_ts,
@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 
 pub async fn serve(cfg: Config) -> Result<(), String> {
     let addr: SocketAddr = cfg
@@ -48,6 +49,9 @@ pub async fn build_app(cfg: Config) -> Result<Router, String> {
         .route("/v0/healthz", get(healthz))
         .route("/v0/events", post(events))
         .route("/v0/generations", post(generations))
+        .route("/v0/job-events", post(job_events))
+        .route("/v0/job-cancel", post(job_cancel))
+        .route("/v0/approval-events", post(approval_events))
         .route("/v0/action-results", post(action_results))
         .route("/v0/contracts", get(contracts))
         .with_state(state))
@@ -76,7 +80,12 @@ impl AppState {
         Ok(Self {
             authz: Arc::new(AuthzEngine::new(&cfg)?),
             audit: Arc::new(
-                AuditJsonl::new(&cfg.audit.jsonl_path, cfg.store.sqlite_path.as_deref()).await?,
+                AuditJsonl::new(
+                    &cfg.audit.jsonl_path,
+                    cfg.store.sqlite_path.as_deref(),
+                    cfg.audit.immutable_mirror_path.as_deref(),
+                )
+                .await?,
             ),
             store: Arc::new(Mutex::new(store)),
             cfg,
@@ -208,7 +217,7 @@ impl AppState {
         let planner_seed = planner_seed(&event.event_id);
         let sampled_probability = planner_probability(&event.event_id);
 
-        let plan = match intent {
+        let mut plan = match intent {
             Intent::Ignore => do_nothing_plan(
                 &event.tenant_id,
                 &event.room_id,
@@ -221,6 +230,23 @@ impl AppState {
                 _ => request_generation_plan(&event, intent, &authz.reason_code),
             },
         };
+
+        if matches!(plan.actions[0].action_type, ActionType::RequestApproval) {
+            let expires_at = server_now
+                + chrono::Duration::milliseconds(self.cfg.planner.approval_timeout_ms as i64);
+            let approval_id = format!("approval:{}", event.event_id);
+            plan.actions[0].payload.insert(
+                "approval_id".to_string(),
+                Value::String(approval_id.clone()),
+            );
+            plan.actions[0].payload.insert(
+                "expires_at".to_string(),
+                Value::String(expires_at.to_rfc3339()),
+            );
+            plan.actions[0]
+                .target
+                .insert("approval_id".to_string(), Value::String(approval_id));
+        }
         validate_response_plan(&plan)?;
 
         let mut store = self.store.lock().await;
@@ -359,6 +385,185 @@ impl AppState {
             .await;
         Ok(plan)
     }
+
+    async fn process_job_status(&self, input: JobStatusEvent) -> Result<ResponsePlan, String> {
+        if input.v != CONTRACT_VERSION {
+            return Err("v must be 0".to_string());
+        }
+        if input.event_id.is_empty() || input.tenant_id.is_empty() || input.job_id.is_empty() {
+            return Err("event_id, tenant_id, job_id are required".to_string());
+        }
+        parse_event_ts(&input.ts).ok_or_else(|| "ts must be RFC3339".to_string())?;
+        if !matches!(
+            input.status.as_str(),
+            "started" | "heartbeat" | "completed" | "failed" | "cancelled"
+        ) {
+            return Err("invalid job status".to_string());
+        }
+
+        if let Some(existing) = {
+            let store = self.store.lock().await;
+            store.get_idempotency(&event_key(&input.tenant_id, &input.event_id))
+        } {
+            return Ok(existing);
+        }
+
+        {
+            let mut store = self.store.lock().await;
+            store
+                .save_job_state(
+                    &input.tenant_id,
+                    &input.job_id,
+                    &input.status,
+                    input.reason_code.as_deref(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+
+        let plan = do_nothing_plan(
+            &input.tenant_id,
+            "",
+            &input.event_id,
+            &format!("job_status_{}", input.status),
+        );
+        {
+            let mut store = self.store.lock().await;
+            store
+                .save_idempotency(event_key(&input.tenant_id, &input.event_id), &plan)
+                .map_err(|e| e.to_string())?;
+        }
+
+        self.audit
+            .append(
+                AuditRecord::new(
+                    &input.tenant_id,
+                    &input.event_id,
+                    "job_event",
+                    "recorded",
+                    &format!("job_status_{}", input.status),
+                    Some(plan.plan_id.clone()),
+                )
+                .with_trace(DecisionTrace {
+                    gate: None,
+                    authz: None,
+                    planner: None,
+                }),
+            )
+            .await;
+        Ok(plan)
+    }
+
+    async fn process_job_cancel(&self, input: JobCancelRequest) -> Result<ResponsePlan, String> {
+        if input.v != CONTRACT_VERSION {
+            return Err("v must be 0".to_string());
+        }
+        if input.event_id.is_empty() || input.tenant_id.is_empty() || input.job_id.is_empty() {
+            return Err("event_id, tenant_id, job_id are required".to_string());
+        }
+        parse_event_ts(&input.ts).ok_or_else(|| "ts must be RFC3339".to_string())?;
+
+        if let Some(existing) = {
+            let store = self.store.lock().await;
+            store.get_idempotency(&event_key(&input.tenant_id, &input.event_id))
+        } {
+            return Ok(existing);
+        }
+
+        {
+            let mut store = self.store.lock().await;
+            store
+                .save_job_state(
+                    &input.tenant_id,
+                    &input.job_id,
+                    "cancelled",
+                    input.reason_code.as_deref(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+
+        let plan = do_nothing_plan(&input.tenant_id, "", &input.event_id, "job_cancelled");
+        {
+            let mut store = self.store.lock().await;
+            store
+                .save_idempotency(event_key(&input.tenant_id, &input.event_id), &plan)
+                .map_err(|e| e.to_string())?;
+        }
+
+        self.audit
+            .append(AuditRecord::new(
+                &input.tenant_id,
+                &input.event_id,
+                "job_cancel",
+                "recorded",
+                "job_cancelled",
+                Some(plan.plan_id.clone()),
+            ))
+            .await;
+        Ok(plan)
+    }
+
+    async fn process_approval_event(&self, input: ApprovalEvent) -> Result<ResponsePlan, String> {
+        if input.v != CONTRACT_VERSION {
+            return Err("v must be 0".to_string());
+        }
+        if input.event_id.is_empty() || input.tenant_id.is_empty() || input.approval_id.is_empty() {
+            return Err("event_id, tenant_id, approval_id are required".to_string());
+        }
+        parse_event_ts(&input.ts).ok_or_else(|| "ts must be RFC3339".to_string())?;
+        if !matches!(
+            input.status.as_str(),
+            "requested" | "approved" | "rejected" | "expired"
+        ) {
+            return Err("invalid approval status".to_string());
+        }
+
+        if let Some(existing) = {
+            let store = self.store.lock().await;
+            store.get_idempotency(&event_key(&input.tenant_id, &input.event_id))
+        } {
+            return Ok(existing);
+        }
+
+        {
+            let mut store = self.store.lock().await;
+            store
+                .save_approval_state(
+                    &input.tenant_id,
+                    &input.approval_id,
+                    &input.status,
+                    input.reason_code.as_deref(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+
+        let reason = format!("approval_{}", input.status);
+        let mut plan = do_nothing_plan(&input.tenant_id, "", &input.event_id, &reason);
+        if input.status == "expired" && self.cfg.planner.approval_escalation_on_expired {
+            plan.debug.insert(
+                "escalation".to_string(),
+                Value::String("notify_human".to_string()),
+            );
+        }
+
+        {
+            let mut store = self.store.lock().await;
+            store
+                .save_idempotency(event_key(&input.tenant_id, &input.event_id), &plan)
+                .map_err(|e| e.to_string())?;
+        }
+
+        self.audit
+            .append(AuditRecord::new(
+                &input.tenant_id,
+                &input.event_id,
+                "approval_event",
+                "recorded",
+                &reason,
+                Some(plan.plan_id.clone()),
+            ))
+            .await;
+        Ok(plan)
+    }
 }
 
 async fn healthz() -> (StatusCode, &'static str) {
@@ -378,6 +583,10 @@ async fn contracts() -> Json<Value> {
                 "request_approval"
             ],
             "reserved": []
+        },
+        "inputs": {
+            "job_events": ["started", "heartbeat", "completed", "failed", "cancelled"],
+            "approval_events": ["requested", "approved", "rejected", "expired"]
         }
     }))
 }
@@ -400,6 +609,54 @@ async fn generations(
 ) -> Result<Json<ResponsePlan>, (StatusCode, Json<Value>)> {
     state
         .process_generation(input)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"code":"validation_error","message": e}})),
+            )
+        })
+}
+
+async fn job_events(
+    State(state): State<AppState>,
+    Json(input): Json<JobStatusEvent>,
+) -> Result<Json<ResponsePlan>, (StatusCode, Json<Value>)> {
+    state
+        .process_job_status(input)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"code":"validation_error","message": e}})),
+            )
+        })
+}
+
+async fn job_cancel(
+    State(state): State<AppState>,
+    Json(input): Json<JobCancelRequest>,
+) -> Result<Json<ResponsePlan>, (StatusCode, Json<Value>)> {
+    state
+        .process_job_cancel(input)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"code":"validation_error","message": e}})),
+            )
+        })
+}
+
+async fn approval_events(
+    State(state): State<AppState>,
+    Json(input): Json<ApprovalEvent>,
+) -> Result<Json<ResponsePlan>, (StatusCode, Json<Value>)> {
+    state
+        .process_approval_event(input)
         .await
         .map(Json)
         .map_err(|e| {
@@ -450,6 +707,8 @@ struct MemoryStore {
     rooms: HashMap<String, RoomState>,
     pending: HashMap<String, PendingGeneration>,
     tenant_rate: HashMap<String, HashMap<i64, usize>>,
+    job_states: HashMap<String, StateEntry>,
+    approval_states: HashMap<String, StateEntry>,
 }
 
 enum StoreBackend {
@@ -469,6 +728,14 @@ struct PendingGeneration {
     reply_to: Option<String>,
     #[allow(dead_code)]
     intent: Intent,
+}
+
+#[derive(Debug, Clone)]
+struct StateEntry {
+    #[allow(dead_code)]
+    status: String,
+    #[allow(dead_code)]
+    reason_code: Option<String>,
 }
 
 impl StoreBackend {
@@ -552,6 +819,56 @@ impl StoreBackend {
             StoreBackend::Sqlite(store) => store.take_pending(key),
         }
     }
+
+    fn save_job_state(
+        &mut self,
+        tenant_id: &str,
+        job_id: &str,
+        status: &str,
+        reason_code: Option<&str>,
+    ) -> Result<(), String> {
+        let key = format!("{tenant_id}:{job_id}");
+        match self {
+            StoreBackend::Memory(store) => {
+                store.job_states.insert(
+                    key,
+                    StateEntry {
+                        status: status.to_string(),
+                        reason_code: reason_code.map(|v| v.to_string()),
+                    },
+                );
+                Ok(())
+            }
+            StoreBackend::Sqlite(store) => {
+                store.save_job_state(tenant_id, job_id, status, reason_code)
+            }
+        }
+    }
+
+    fn save_approval_state(
+        &mut self,
+        tenant_id: &str,
+        approval_id: &str,
+        status: &str,
+        reason_code: Option<&str>,
+    ) -> Result<(), String> {
+        let key = format!("{tenant_id}:{approval_id}");
+        match self {
+            StoreBackend::Memory(store) => {
+                store.approval_states.insert(
+                    key,
+                    StateEntry {
+                        status: status.to_string(),
+                        reason_code: reason_code.map(|v| v.to_string()),
+                    },
+                );
+                Ok(())
+            }
+            StoreBackend::Sqlite(store) => {
+                store.save_approval_state(tenant_id, approval_id, status, reason_code)
+            }
+        }
+    }
 }
 
 impl SqliteStore {
@@ -582,6 +899,22 @@ impl SqliteStore {
                 bucket INTEGER NOT NULL,
                 count INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, bucket)
+            );
+            CREATE TABLE IF NOT EXISTS job_states (
+                tenant_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reason_code TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, job_id)
+            );
+            CREATE TABLE IF NOT EXISTS approval_states (
+                tenant_id TEXT NOT NULL,
+                approval_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reason_code TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, approval_id)
             );
             ",
         )
@@ -749,6 +1082,64 @@ impl SqliteStore {
         }
         Ok(row)
     }
+
+    fn save_job_state(
+        &mut self,
+        tenant_id: &str,
+        job_id: &str,
+        status: &str,
+        reason_code: Option<&str>,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "
+                INSERT INTO job_states (tenant_id, job_id, status, reason_code, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5)
+                ON CONFLICT(tenant_id, job_id) DO UPDATE SET
+                    status=excluded.status,
+                    reason_code=excluded.reason_code,
+                    updated_at=excluded.updated_at
+                ",
+                params![
+                    tenant_id,
+                    job_id,
+                    status,
+                    reason_code,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn save_approval_state(
+        &mut self,
+        tenant_id: &str,
+        approval_id: &str,
+        status: &str,
+        reason_code: Option<&str>,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "
+                INSERT INTO approval_states (tenant_id, approval_id, status, reason_code, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5)
+                ON CONFLICT(tenant_id, approval_id) DO UPDATE SET
+                    status=excluded.status,
+                    reason_code=excluded.reason_code,
+                    updated_at=excluded.updated_at
+                ",
+                params![
+                    tenant_id,
+                    approval_id,
+                    status,
+                    reason_code,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -762,10 +1153,16 @@ struct AuthzEngine {
     mode: String,
     endpoint: Option<String>,
     fail_mode: String,
+    retry_max_attempts: usize,
+    retry_backoff: Duration,
+    circuit_breaker_failures: u64,
+    circuit_breaker_open: Duration,
     cache_enabled: bool,
     cache_ttl: Duration,
     cache_max_entries: usize,
     cache: Arc<Mutex<HashMap<String, CachedDecision>>>,
+    failure_streak: Arc<Mutex<u64>>,
+    circuit_open_until: Arc<Mutex<Option<Instant>>>,
     client: Client,
 }
 
@@ -786,10 +1183,16 @@ impl AuthzEngine {
             mode: cfg.authz.mode.clone(),
             endpoint: cfg.authz.endpoint.clone(),
             fail_mode: cfg.authz.fail_mode.clone(),
+            retry_max_attempts: cfg.authz.retry_max_attempts.max(1),
+            retry_backoff: Duration::from_millis(cfg.authz.retry_backoff_ms),
+            circuit_breaker_failures: cfg.authz.circuit_breaker_failures.max(1),
+            circuit_breaker_open: Duration::from_millis(cfg.authz.circuit_breaker_open_ms.max(1)),
             cache_enabled: cfg.authz.cache.enabled,
             cache_ttl: Duration::from_millis(cfg.authz.cache.ttl_ms as u64),
             cache_max_entries: cfg.authz.cache.max_entries,
             cache: Arc::new(Mutex::new(HashMap::new())),
+            failure_streak: Arc::new(Mutex::new(0)),
+            circuit_open_until: Arc::new(Mutex::new(None)),
             client,
         })
     }
@@ -801,6 +1204,15 @@ impl AuthzEngine {
                 reason_code: "builtin_allow_all".to_string(),
                 policy_version: Some("builtin:v0".to_string()),
             };
+        }
+
+        {
+            let open_until = self.circuit_open_until.lock().await;
+            if let Some(until) = *open_until {
+                if until > Instant::now() {
+                    return self.on_failure("authz_circuit_open");
+                }
+            }
         }
 
         let key = format!(
@@ -848,27 +1260,60 @@ impl AuthzEngine {
             },
         };
 
-        let response = match self.client.post(endpoint).json(&request).send().await {
-            Ok(v) => v,
-            Err(_) => return self.on_failure("authz_transport_error"),
-        };
-        if !response.status().is_success() {
-            return self.on_failure("authz_http_error");
+        let mut last_failure = "authz_transport_error";
+        let mut decision_opt = None;
+        for attempt in 0..self.retry_max_attempts {
+            let response = match self.client.post(endpoint).json(&request).send().await {
+                Ok(v) => v,
+                Err(_) => {
+                    last_failure = "authz_transport_error";
+                    if attempt + 1 < self.retry_max_attempts && self.retry_backoff > Duration::ZERO
+                    {
+                        sleep(self.retry_backoff).await;
+                    }
+                    continue;
+                }
+            };
+            if !response.status().is_success() {
+                last_failure = "authz_http_error";
+                if attempt + 1 < self.retry_max_attempts && self.retry_backoff > Duration::ZERO {
+                    sleep(self.retry_backoff).await;
+                }
+                continue;
+            }
+
+            let decision: AuthZDecision = match response.json().await {
+                Ok(v) => v,
+                Err(_) => {
+                    last_failure = "authz_contract_parse_error";
+                    if attempt + 1 < self.retry_max_attempts && self.retry_backoff > Duration::ZERO
+                    {
+                        sleep(self.retry_backoff).await;
+                    }
+                    continue;
+                }
+            };
+            if decision.v != CONTRACT_VERSION
+                || (decision.decision != "allow" && decision.decision != "deny")
+                || decision.policy_version.trim().is_empty()
+            {
+                last_failure = "authz_contract_invalid";
+                break;
+            }
+            decision_opt = Some(decision);
+            break;
         }
 
-        let decision: AuthZDecision = match response.json().await {
-            Ok(v) => v,
-            Err(_) => return self.on_failure("authz_contract_parse_error"),
+        let decision = match decision_opt {
+            Some(v) => {
+                self.record_authz_success().await;
+                v
+            }
+            None => {
+                self.record_authz_failure().await;
+                return self.on_failure(last_failure);
+            }
         };
-        if decision.v != CONTRACT_VERSION {
-            return self.on_failure("authz_contract_invalid");
-        }
-        if decision.decision != "allow" && decision.decision != "deny" {
-            return self.on_failure("authz_contract_invalid");
-        }
-        if decision.policy_version.trim().is_empty() {
-            return self.on_failure("authz_contract_invalid");
-        }
 
         let outcome = AuthzOutcome {
             allow: decision.decision == "allow",
@@ -905,6 +1350,22 @@ impl AuthzEngine {
         outcome
     }
 
+    async fn record_authz_failure(&self) {
+        let mut streak = self.failure_streak.lock().await;
+        *streak += 1;
+        if *streak >= self.circuit_breaker_failures {
+            let mut open_until = self.circuit_open_until.lock().await;
+            *open_until = Some(Instant::now() + self.circuit_breaker_open);
+        }
+    }
+
+    async fn record_authz_success(&self) {
+        let mut streak = self.failure_streak.lock().await;
+        *streak = 0;
+        let mut open_until = self.circuit_open_until.lock().await;
+        *open_until = None;
+    }
+
     fn on_failure(&self, reason: &str) -> AuthzOutcome {
         match self.fail_mode.as_str() {
             "allow" => AuthzOutcome {
@@ -928,11 +1389,12 @@ impl AuthzEngine {
 
 struct AuditJsonl {
     file: Arc<Mutex<tokio::fs::File>>,
+    immutable_mirror: Option<Arc<Mutex<tokio::fs::File>>>,
     sqlite: Option<Arc<Mutex<Connection>>>,
     last_hash: Arc<Mutex<Option<String>>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct AuditRecord {
     audit_id: String,
     tenant_id: String,
@@ -950,7 +1412,7 @@ struct AuditRecord {
     record_hash: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct DecisionTrace {
     #[serde(skip_serializing_if = "Option::is_none")]
     gate: Option<StageDecision>,
@@ -960,13 +1422,13 @@ struct DecisionTrace {
     planner: Option<PlannerDecisionTrace>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct StageDecision {
     result: String,
     reason_code: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct AuthzDecisionTrace {
     result: String,
     reason_code: String,
@@ -974,7 +1436,7 @@ struct AuthzDecisionTrace {
     policy_version: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct PlannerDecisionTrace {
     reply_policy: String,
     chosen_intent: String,
@@ -1013,7 +1475,11 @@ impl AuditRecord {
 }
 
 impl AuditJsonl {
-    async fn new(path: &str, sqlite_path: Option<&str>) -> Result<Self, String> {
+    async fn new(
+        path: &str,
+        sqlite_path: Option<&str>,
+        immutable_mirror_path: Option<&str>,
+    ) -> Result<Self, String> {
         let last_hash = std::fs::read_to_string(path).ok().and_then(|text| {
             text.lines().rev().find_map(|line| {
                 serde_json::from_str::<serde_json::Value>(line)
@@ -1032,6 +1498,18 @@ impl AuditJsonl {
             .open(path)
             .await
             .map_err(|e| e.to_string())?;
+
+        let immutable_mirror = match immutable_mirror_path {
+            Some(path) if !path.is_empty() => Some(Arc::new(Mutex::new(
+                tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            ))),
+            _ => None,
+        };
 
         let sqlite = match sqlite_path {
             Some(path) => {
@@ -1059,6 +1537,7 @@ impl AuditJsonl {
 
         Ok(Self {
             file: Arc::new(Mutex::new(file)),
+            immutable_mirror,
             sqlite,
             last_hash: Arc::new(Mutex::new(last_hash)),
         })
@@ -1076,6 +1555,12 @@ impl AuditJsonl {
             use tokio::io::AsyncWriteExt;
             let _ = file.write_all(line.as_bytes()).await;
             let _ = file.write_all(b"\n").await;
+
+            if let Some(mirror) = &self.immutable_mirror {
+                let mut mirror_file = mirror.lock().await;
+                let _ = mirror_file.write_all(line.as_bytes()).await;
+                let _ = mirror_file.write_all(b"\n").await;
+            }
 
             {
                 let mut last_hash = self.last_hash.lock().await;
@@ -1112,6 +1597,45 @@ fn hash_hex(input: &[u8]) -> String {
     hasher.update(input);
     let digest = hasher.finalize();
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn verify_audit_chain(path: &str) -> Result<String, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut prev: Option<String> = None;
+    let mut count = 0usize;
+
+    for (idx, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let rec: AuditRecord = serde_json::from_str(line)
+            .map_err(|e| format!("line {} parse failed: {e}", idx + 1))?;
+        if idx > 0 && rec.prev_hash != prev {
+            return Err(format!(
+                "line {} prev_hash mismatch: expected {:?}, got {:?}",
+                idx + 1,
+                prev,
+                rec.prev_hash
+            ));
+        }
+        let mut seeded = rec.clone();
+        seeded.record_hash.clear();
+        let seed = serde_json::to_string(&seeded)
+            .map_err(|e| format!("line {} hash seed serialize failed: {e}", idx + 1))?;
+        let expected_hash = hash_hex(seed.as_bytes());
+        if rec.record_hash != expected_hash {
+            return Err(format!(
+                "line {} record_hash mismatch: expected {}, got {}",
+                idx + 1,
+                expected_hash,
+                rec.record_hash
+            ));
+        }
+        prev = Some(rec.record_hash);
+        count += 1;
+    }
+
+    Ok(format!("audit chain verified: {count} records"))
 }
 
 fn validate_event(e: &Event) -> Result<(), String> {
