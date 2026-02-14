@@ -1,42 +1,35 @@
 # Changelog
 
-## 1.1.1
+## 1.2.0
+
+### Breaking
+
+- Reset protocol to provider-agnostic envelope contracts (`ops.*`).
+- Removed legacy provider-shaped schemas and endpoints from OpenAPI.
+- Introduced governance authority response model on `GET /v1/contracts`.
 
 ### Added
 
-- Event idempotency semantics document: `docs/state/events.md`.
-- API error code catalog: `docs/errors.md`.
+- JCS (RFC8785) + sha256 fingerprint utility and fixtures.
+- Structured error schema (`ops.errors`) and stable error taxonomy.
+- Capability discovery schemas/docs (`ops.capabilities`, docs/spec/*).
+- Release intent documentation for v1.2.0 (`docs/releases/v1.2.0.md`).
 
 ### Changed
 
-- `POST /v1/events` now rejects duplicate `(tenant_id, event_id)` with payload mismatch using `409 conflict.payload_mismatch` and hash diagnostics.
-- `build_app` now rejects unsupported `store.kind` in all paths with `config.invalid_store_kind`.
-- README (EN/JA) now documents event duplicate conflict behavior and links the new state/error docs.
+- Event idempotency conflict diagnostics now return `existing_hash` and `incoming_hash`.
+- Action-result idempotency uses JCS fingerprints with strict mismatch conflict detection.
+- Decision-time model derives `evaluation_time` from `event.occurred_at`.
+- Audit hash chaining now includes envelope fingerprints.
 
-### Fixed
+### Migration note
 
-- Added memory/sqlite tests for duplicate event payload mismatch conflict behavior.
-- Added test coverage for invalid `store.kind` startup failure.
+v1.2.0 is a protocol reset. Consumers must migrate to the new envelope contracts in `contracts/v1/ops.*.schema.json`.
+
+## 1.1.1
+
+- Legacy patch release notes kept for historical context.
 
 ## 1.1.0
 
-### Added
-
-- `GET /v1/action-results/{tenant_id}/{plan_id}/{action_id}` for stored action-result retrieval.
-- Build-time generated contracts metadata manifest in `arbiter-contracts`.
-- State semantics docs for jobs, approvals, and action-results.
-- Audit mirror semantics doc and mirror verification CLI support.
-- Contracts verification task in local CI (`mise run contracts-verify`).
-
-### Changed
-
-- `/v1/contracts` now reads build-generated metadata from contracts + OpenAPI source files.
-- Job and approval event processing now enforces transition conflicts (`409`).
-- Job and approval duplicate events with payload mismatch return `409 conflict.payload_mismatch`.
-- Action-results idempotency key is now `(tenant_id, plan_id, action_id)`.
-- Audit mirror write failures are fail-closed for request processing.
-
-### Non-goals
-
-- No background expiration mutation for approvals.
-- No external action execution in Arbiter runtime.
+- Legacy minor release notes kept for historical context.
