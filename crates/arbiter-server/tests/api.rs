@@ -507,3 +507,34 @@ async fn can_choose_request_approval_action_via_extension() {
     let plan: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(plan["actions"][0]["type"], "request_approval");
 }
+
+#[tokio::test]
+async fn audit_jsonl_records_are_hash_chained() {
+    let cfg = test_config_with_authz_audit(true);
+    let audit_path = cfg.audit.jsonl_path.clone();
+    let app = build_app(cfg).await.unwrap();
+
+    for event_id in ["evt-chain-1", "evt-chain-2"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v0/events")
+            .header("content-type", "application/json")
+            .body(Body::from(sample_event(event_id).to_string()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let audit_text = std::fs::read_to_string(audit_path).unwrap();
+    let lines: Vec<&str> = audit_text.lines().collect();
+    assert!(lines.len() >= 2);
+
+    let first: Value = serde_json::from_str(lines[lines.len() - 2]).unwrap();
+    let second: Value = serde_json::from_str(lines[lines.len() - 1]).unwrap();
+
+    let first_hash = first["record_hash"].as_str().unwrap();
+    let second_prev = second["prev_hash"].as_str().unwrap();
+    assert!(!first_hash.is_empty());
+    assert_eq!(second_prev, first_hash);
+}

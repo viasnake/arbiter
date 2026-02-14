@@ -22,6 +22,7 @@ use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 pub async fn serve(cfg: Config) -> Result<(), String> {
@@ -928,6 +929,7 @@ impl AuthzEngine {
 struct AuditJsonl {
     file: Arc<Mutex<tokio::fs::File>>,
     sqlite: Option<Arc<Mutex<Connection>>>,
+    last_hash: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Serialize)]
@@ -943,6 +945,9 @@ struct AuditRecord {
     plan_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     decision_trace: Option<DecisionTrace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prev_hash: Option<String>,
+    record_hash: String,
 }
 
 #[derive(Serialize)]
@@ -996,6 +1001,8 @@ impl AuditRecord {
             ts: Utc::now().to_rfc3339(),
             plan_id,
             decision_trace: None,
+            prev_hash: None,
+            record_hash: String::new(),
         }
     }
 
@@ -1007,6 +1014,18 @@ impl AuditRecord {
 
 impl AuditJsonl {
     async fn new(path: &str, sqlite_path: Option<&str>) -> Result<Self, String> {
+        let last_hash = std::fs::read_to_string(path).ok().and_then(|text| {
+            text.lines().rev().find_map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("record_hash")
+                            .and_then(|hash| hash.as_str())
+                            .map(|s| s.to_string())
+                    })
+            })
+        });
+
         let file = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1041,15 +1060,27 @@ impl AuditJsonl {
         Ok(Self {
             file: Arc::new(Mutex::new(file)),
             sqlite,
+            last_hash: Arc::new(Mutex::new(last_hash)),
         })
     }
 
-    async fn append(&self, rec: AuditRecord) {
+    async fn append(&self, mut rec: AuditRecord) {
+        let prev_hash = { self.last_hash.lock().await.clone() };
+        rec.prev_hash = prev_hash;
+        if let Ok(seed) = serde_json::to_string(&rec) {
+            rec.record_hash = hash_hex(seed.as_bytes());
+        }
+
         let mut file = self.file.lock().await;
         if let Ok(line) = serde_json::to_string(&rec) {
             use tokio::io::AsyncWriteExt;
             let _ = file.write_all(line.as_bytes()).await;
             let _ = file.write_all(b"\n").await;
+
+            {
+                let mut last_hash = self.last_hash.lock().await;
+                *last_hash = Some(rec.record_hash.clone());
+            }
 
             if let Some(sqlite) = &self.sqlite {
                 let conn = sqlite.lock().await;
@@ -1074,6 +1105,13 @@ impl AuditJsonl {
             }
         }
     }
+}
+
+fn hash_hex(input: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn validate_event(e: &Event) -> Result<(), String> {

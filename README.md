@@ -54,6 +54,11 @@ Contracts under `contracts/` are the long-lived compatibility boundary.
 - Deprecations must be documented before removal.
 - v0 still treats breaking changes as exceptional and explicitly documented in changelog and decision log.
 
+## Audit integrity baseline
+
+Audit records include a hash chain (`prev_hash`, `record_hash`) to make tampering detectable.
+The chain is append-only and carried in JSONL (and sqlite-backed audit when sqlite store is enabled).
+
 ## Quick start
 
 Install toolchain via mise:
