@@ -258,6 +258,78 @@ mod tests {
     }
 
     #[test]
+    fn openapi_paths_use_expected_schema_refs() {
+        let openapi_text = std::fs::read_to_string(repo_path("openapi/v1.yaml")).unwrap();
+        let openapi: serde_yaml::Value = serde_yaml::from_str(&openapi_text).unwrap();
+
+        let expected_refs = [
+            (
+                "/v1/events",
+                "post.requestBody.content.application/json.schema.$ref",
+                "#/components/schemas/Event",
+            ),
+            (
+                "/v1/events",
+                "post.responses.200.content.application/json.schema.$ref",
+                "#/components/schemas/ResponsePlan",
+            ),
+            (
+                "/v1/generations",
+                "post.requestBody.content.application/json.schema.$ref",
+                "#/components/schemas/GenerationResult",
+            ),
+            (
+                "/v1/job-events",
+                "post.requestBody.content.application/json.schema.$ref",
+                "#/components/schemas/JobStatusEvent",
+            ),
+            (
+                "/v1/job-cancel",
+                "post.requestBody.content.application/json.schema.$ref",
+                "#/components/schemas/JobCancelRequest",
+            ),
+            (
+                "/v1/approval-events",
+                "post.requestBody.content.application/json.schema.$ref",
+                "#/components/schemas/ApprovalEvent",
+            ),
+            (
+                "/v1/action-results",
+                "post.requestBody.content.application/json.schema.$ref",
+                "#/components/schemas/ActionResult",
+            ),
+            (
+                "/v1/contracts",
+                "get.responses.200.content.application/json.schema.$ref",
+                "#/components/schemas/ContractsMetadata",
+            ),
+            (
+                "/v1/jobs/{tenant_id}/{job_id}",
+                "get.responses.200.content.application/json.schema.$ref",
+                "#/components/schemas/StateResponse",
+            ),
+            (
+                "/v1/approvals/{tenant_id}/{approval_id}",
+                "get.responses.200.content.application/json.schema.$ref",
+                "#/components/schemas/StateResponse",
+            ),
+        ];
+
+        for (path, path_expr, expected_ref) in expected_refs {
+            let mut node = openapi
+                .get("paths")
+                .and_then(|v| v.get(path))
+                .unwrap_or_else(|| panic!("missing path: {path}"));
+            for token in path_expr.split('.') {
+                node = node
+                    .get(token)
+                    .unwrap_or_else(|| panic!("missing token {token} in {path_expr}"));
+            }
+            assert_eq!(node.as_str().unwrap(), expected_ref);
+        }
+    }
+
+    #[test]
     fn rust_contract_samples_match_json_schemas() {
         let event_validator = schema_validator("contracts/v1/event.schema.json");
         let action_schema_text =
