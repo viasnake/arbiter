@@ -82,6 +82,12 @@ OpenAPI: `openapi/v1.yaml`
 - 冪等キー: `tenant_id + plan_id + action_id`
 - 同一キーでペイロード不一致の場合は `409` を返却（`conflict.payload_mismatch`）
 
+`POST /v1/events` の冪等セマンティクス（v1）:
+
+- 冪等キー: `tenant_id + event_id`
+- 同一キーかつ同一ペイロード: 既存の `ResponsePlan` を返却（`200`）
+- 同一キーかつ異なるペイロード: `409` を返却（`conflict.payload_mismatch`）
+
 状態参照 API:
 
 - `GET /v1/jobs/{tenant_id}/{job_id}`
@@ -174,7 +180,7 @@ mise run ci
 - SLO: `docs/slo.md`
 - Runbook: `docs/runbook.md`
 - AuthZ 耐障害ポリシー: `docs/authz-resilience.md`
-- 状態セマンティクス: `docs/state/jobs.md`, `docs/state/approvals.md`, `docs/state/action-results.md`
+- 状態セマンティクス: `docs/state/events.md`, `docs/state/jobs.md`, `docs/state/approvals.md`, `docs/state/action-results.md`
 - 監査 mirror セマンティクス: `docs/audit-mirror.md`
 - Contracts メタデータ生成: `docs/contracts-metadata.md`
 - Contracts endpoint セマンティクス: `docs/contracts-endpoint.md`

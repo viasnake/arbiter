@@ -82,6 +82,12 @@ OpenAPI: `openapi/v1.yaml`
 - idempotency key: `tenant_id + plan_id + action_id`
 - conflicting duplicate payload mismatch: returns `409` (`conflict.payload_mismatch`)
 
+`POST /v1/events` idempotency semantics (v1):
+
+- idempotency key: `tenant_id + event_id`
+- duplicate with identical payload: returns existing `ResponsePlan` (`200`)
+- duplicate with different payload: returns `409` (`conflict.payload_mismatch`)
+
 Read APIs:
 
 - `GET /v1/jobs/{tenant_id}/{job_id}`
@@ -174,7 +180,7 @@ mise run ci
 - SLO draft: `docs/slo.md`
 - Runbook: `docs/runbook.md`
 - AuthZ resilience policy: `docs/authz-resilience.md`
-- State semantics: `docs/state/jobs.md`, `docs/state/approvals.md`, `docs/state/action-results.md`
+- State semantics: `docs/state/events.md`, `docs/state/jobs.md`, `docs/state/approvals.md`, `docs/state/action-results.md`
 - Audit mirror semantics: `docs/audit-mirror.md`
 - Contracts metadata generation: `docs/contracts-metadata.md`
 - Contracts endpoint semantics: `docs/contracts-endpoint.md`
