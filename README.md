@@ -1,111 +1,139 @@
 # Arbiter
 
-Arbiter is a deterministic control plane for AI systems.
+[English](README.md) | [日本語](README.ja.md)
 
-It does not generate text, execute tools, or run agent loops.
-Its purpose is to decide what should happen next, under explicit policy,
-with auditable and repeatable behavior.
+Arbiter is a deterministic decision control plane for AI-driven products.
 
-Job and approval lifecycle endpoints also follow this rule: they only update decision state and emit plans; they never execute external work.
+It decides what should happen next. It does not execute that action.
 
-## Why Arbiter exists
+## Why this exists
 
-Modern AI runtimes mix generation, execution, and policy in one place.
-That creates hidden coupling and makes failures hard to explain.
+Most AI incidents are not caused by weak text generation quality. They are caused by weak control: duplicate execution, unclear authorization, hidden retries, and missing audit evidence.
 
-Arbiter separates concerns:
+Arbiter exists to make decision behavior explicit, repeatable, and diagnosable.
 
-- Accept normalized events.
-- Evaluate gate and authorization policy.
+When generation, policy, and execution are tightly coupled in one runtime, operators cannot reliably answer basic questions after an incident:
+
+- Why was this action allowed?
+- Why did the system choose this path?
+- Why did a retry produce different behavior?
+
+Arbiter separates decision logic from execution so those questions can be answered with evidence.
+
+## Typical use cases
+
+Arbiter is useful when side effects are expensive or risky.
+
+- Messaging and assistant systems where duplicate sends must be prevented.
+- Human-in-the-loop workflows that require explicit approval before action.
+- Multi-tenant systems that need consistent gate and authorization policy enforcement.
+- Long-running agent workflows that need job state and cancellation control.
+- Environments that require auditable, deterministic replay for incident analysis.
+
+## What Arbiter can do
+
+- Validate normalized input events against contracts.
+- Enforce gate decisions (cooldown, queue, rate).
+- Evaluate authorization and fail posture.
 - Produce deterministic response plans.
-- Persist append-only audit records.
 - Guarantee idempotency for `(tenant_id, event_id)`.
+- Persist append-only audit records with hash-chain integrity fields.
+- Accept and reconcile job and approval lifecycle events.
 
-This separation makes behavior diagnosable and safer to evolve.
+## What Arbiter does not do (by design)
 
-## Scope of v0.0.1
+These are out of scope by responsibility boundary, not missing features.
 
-Store support:
+- It does not execute actions such as sending messages or calling tools.
+- It does not generate text itself.
+- It does not run job workers.
+- It does not provide end-user approval UI.
+- It does not manage external product credentials for connectors.
+
+Arbiter is the decision plane. Execution belongs to the execution plane.
+
+## Core guarantees
+
+- Deterministic decision behavior for the same input, policy, and state.
+- Explicit fail posture with visible reason codes.
+- Idempotent event handling.
+- Explainable decision trace in audit records.
+- Tamper-evident audit chain (`prev_hash`, `record_hash`).
+
+## API overview (v1)
+
+- `POST /v1/events`
+- `POST /v1/generations`
+- `POST /v1/job-events`
+- `POST /v1/job-cancel`
+- `POST /v1/approval-events`
+- `POST /v1/action-results`
+- `GET /v1/contracts`
+- `GET /v1/healthz`
+
+OpenAPI: `openapi/v1.yaml`
+
+## Contracts and versioning
+
+- Active contract set: `contracts/v1/*`
+- Contract runtime version: `v=1`
+- Compatibility policy: `docs/contract-compatibility-policy.md`
+
+## Storage
+
+Supported stores:
 
 - `memory`
 - `sqlite`
 
-Any other `store.type` value is rejected at startup. When `store.type=sqlite`, `store.sqlite_path` is required.
+Any other `store.type` fails at startup.
+When `store.type=sqlite`, `store.sqlite_path` is required.
 
-SQLite migration policy (v0.x):
+SQLite migration baseline:
 
-- Startup creates missing tables with `CREATE TABLE IF NOT EXISTS`.
-- Schema evolution is additive-first; destructive migration is deferred until explicit migration tooling is introduced.
-- Upgrades must preserve deterministic behavior and idempotency semantics.
+- Startup creates missing tables using `CREATE TABLE IF NOT EXISTS`.
+- Evolution is additive-first.
+- Determinism and idempotency behavior must not change across upgrades.
 
-Implemented action types:
+## Audit integrity
 
-- `do_nothing`
-- `request_generation`
-- `send_message`
-- `send_reply`
-- `start_agent_job`
-- `request_approval`
+Audit records are append-only and include hash-chain fields.
 
-## Contract versioning policy
+- `prev_hash`: previous record hash
+- `record_hash`: hash of current record seed
 
-Contracts under `contracts/` are the long-lived compatibility boundary.
+Optional immutable mirror sink can be configured via `audit.immutable_mirror_path`.
 
-- Non-breaking additions can be released in minor versions.
-- Breaking contract changes require a major version bump.
-- Deprecations must be documented before removal.
-- v0 still treats breaking changes as exceptional and explicitly documented in changelog and decision log.
+Verify audit chain:
 
-## Audit integrity baseline
-
-Audit records include a hash chain (`prev_hash`, `record_hash`) to make tampering detectable.
-The chain is append-only and carried in JSONL (and sqlite-backed audit when sqlite store is enabled).
+```bash
+arbiter audit-verify --path ./arbiter-audit.jsonl
+```
 
 ## Quick start
 
-Install toolchain via mise:
+Install toolchain:
 
 ```bash
 mise install
 ```
 
+Run server:
+
 ```bash
 mise exec -- cargo run -- serve --config ./config/example-config.yaml
 ```
 
-Build a single binary:
+Build binary:
 
 ```bash
 mise run build
 ./target/release/arbiter serve --config ./config/example-config.yaml
 ```
 
-Endpoints:
+## Local quality gates
 
-- `POST /v0/events`
-- `POST /v0/generations`
-- `POST /v0/job-events`
-- `POST /v0/job-cancel`
-- `POST /v0/approval-events`
-- `POST /v0/action-results`
-- `GET /v0/contracts`
-- `GET /v0/healthz`
-
-Audit chain verification:
-
-```bash
-arbiter audit-verify --path ./arbiter-audit.jsonl
-```
-
-## Local verification
-
-Run the same checks as CI:
-
-```bash
-make ci
-```
-
-Or run each step directly:
+Run CI-equivalent checks:
 
 ```bash
 mise run fmt-check
@@ -114,17 +142,13 @@ mise run test
 mise run build
 ```
 
-## CI
+## Operations
 
-GitHub Actions runs format, lint, test, and release build on push and pull request.
-Workflow file: `.github/workflows/ci.yml`.
-Toolchain and task orchestration are managed with `mise.toml`.
+- SLO draft: `docs/slo.md`
+- Runbook: `docs/runbook.md`
+- AuthZ resilience policy: `docs/authz-resilience.md`
 
 ## Design documents
-
-The design intent is documented under `docs/`.
-The emphasis is on why decisions were made and how to extend safely,
-not on implementation internals.
 
 - `docs/architecture-principles.md`
 - `docs/decision-log.md`
@@ -132,6 +156,3 @@ not on implementation internals.
 - `docs/extensibility-roadmap.md`
 - `docs/contracts-intent.md`
 - `docs/contract-compatibility-policy.md`
-- `docs/authz-resilience.md`
-- `docs/slo.md`
-- `docs/runbook.md`
