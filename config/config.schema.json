@@ -34,19 +34,9 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["memory", "sqlite"]
-        },
-        "sqlite_path": {
-          "type": "string",
-          "description": "Path to sqlite database file"
+          "enum": ["memory"]
         }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "type": { "const": "sqlite" } } },
-          "then": { "required": ["sqlite_path"] }
-        }
-      ]
+      }
     },
 
     "authz": {
