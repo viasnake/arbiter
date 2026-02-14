@@ -12,7 +12,7 @@ Arbiter は「次に何をすべきか」を決めます。実行はしません
 
 Arbiter は、決定挙動を明示的・再現可能・診断可能にするために存在します。
 
-生成・ポリシー・実行を 1 つのランタイムで密結合すると、障害後に以下へ確実に答えられません。
+生成・ポリシー・実行を 1 つのランタイムで密結合すると、障害後に次の問いへ確実に答えられなくなります。
 
 - なぜこの操作が許可されたのか
 - なぜこの分岐が選ばれたのか
@@ -37,8 +37,8 @@ Arbiter は決定ロジックを実行から分離し、これらを証跡で説
 - 認可判定と fail posture を適用する
 - 決定的な ResponsePlan を生成する
 - `(tenant_id, event_id)` の冪等性を保証する
-- 追記専用監査ログと hash-chain 整合を維持する
-- job / approval ライフサイクルイベントを受けて状態整合する
+- 追記専用監査ログとハッシュチェーン整合性を維持する
+- job / approval ライフサイクルイベントを受けて状態を整合させる
 
 ## Arbiter がしないこと（設計上の責務外）
 
@@ -68,6 +68,7 @@ Arbiter は決定プレーンです。実行は実行プレーンが担います
 - `POST /v1/job-cancel`
 - `POST /v1/approval-events`
 - `POST /v1/action-results`
+- `GET /v1/action-results/{tenant_id}/{plan_id}/{action_id}`
 - `GET /v1/contracts`
 - `GET /v1/healthz`
 
@@ -78,20 +79,21 @@ OpenAPI: `openapi/v1.yaml`
 - 必須: `v`, `plan_id`, `action_id`, `tenant_id`, `status`, `ts`
 - 任意: `provider_message_id`, `reason_code`, `error`
 - `status` 列挙: `succeeded` | `failed` | `skipped`
-- 冪等キー: `tenant_id + action_id + provider_message_id`（fallback: canonical payload hash）
-- 重複競合または禁止遷移は `409` を返却
+- 冪等キー: `tenant_id + plan_id + action_id`
+- 同一キーでペイロード不一致の場合は `409` を返却（`conflict.payload_mismatch`）
 
-参照 API:
+状態参照 API:
 
 - `GET /v1/jobs/{tenant_id}/{job_id}`
 - `GET /v1/approvals/{tenant_id}/{approval_id}`
+- `GET /v1/action-results/{tenant_id}/{plan_id}/{action_id}`
 
 ## Contracts とバージョニング
 
 - 利用中契約セット: `contracts/v1/*`
 - 実行時契約バージョン: `v=1`
-- OpenAPI の schema source: `openapi/v1.yaml` から `contracts/v1/*` を直接参照
-- `GET /v1/contracts` は埋め込み済み OpenAPI/contracts から生成し、ソース hash を返却
+- OpenAPI のスキーマソース: `openapi/v1.yaml` から `contracts/v1/*` を直接参照
+- `GET /v1/contracts` は OpenAPI/contracts 由来の build-time manifest から生成し、ソースハッシュを返却
 - 互換性ポリシー: `docs/contract-compatibility-policy.md`
 
 ## ストレージ
@@ -101,8 +103,8 @@ OpenAPI: `openapi/v1.yaml`
 - `memory`
 - `sqlite`
 
-上記以外の `store.type` は起動時に失敗します。
-`store.type=sqlite` の場合、`store.sqlite_path` は必須です。
+上記以外の `store.kind` は起動時に失敗します。
+`store.kind=sqlite` の場合、`store.sqlite_path` は必須です。
 
 SQLite マイグレーション基準:
 
@@ -112,17 +114,18 @@ SQLite マイグレーション基準:
 
 ## 監査整合性
 
-監査レコードは追記専用で、hash-chain フィールドを持ちます。
+監査レコードは追記専用で、ハッシュチェーン整合性のためのフィールドを持ちます。
 
 - `prev_hash`: 直前レコードのハッシュ
 - `record_hash`: 現在レコード seed のハッシュ
 
-`audit.immutable_mirror_path` による optional immutable mirror sink を設定できます。
+`audit.immutable_mirror_path` により、オプションの immutable mirror sink を設定できます。
 
 監査チェーン検証:
 
 ```bash
 arbiter audit-verify --path ./arbiter-audit.jsonl
+arbiter audit-verify --path ./arbiter-audit.jsonl --mirror-path ./arbiter-audit-mirror.jsonl
 ```
 
 ## クイックスタート
@@ -153,21 +156,29 @@ CI 相当チェック:
 ```bash
 mise run fmt-check
 mise run lint
+mise run contracts-verify
 mise run test
 mise run build
+mise run ci
 ```
 
 ## リリース自動化
 
-- SemVer タグ（例: `v1.0.0`）を push すると release workflow が起動します。
+- SemVer タグ（例: `v1.1.0`）を push すると release workflow が起動します。
 - 公開前に tag/Cargo/OpenAPI のバージョン整合を検証します。
 - GitHub Release notes は自動生成され、バイナリと checksum を添付します。
+- 変更履歴とリリーススコープ: `CHANGELOG.md`, `docs/releases/v1.1.0.md`
 
 ## 運用
 
 - SLO: `docs/slo.md`
 - Runbook: `docs/runbook.md`
 - AuthZ 耐障害ポリシー: `docs/authz-resilience.md`
+- 状態セマンティクス: `docs/state/jobs.md`, `docs/state/approvals.md`, `docs/state/action-results.md`
+- 監査 mirror セマンティクス: `docs/audit-mirror.md`
+- Contracts メタデータ生成: `docs/contracts-metadata.md`
+- Contracts endpoint セマンティクス: `docs/contracts-endpoint.md`
+- リリーススコープ（v1.1.0）: `docs/releases/v1.1.0.md`
 
 ## 設計ドキュメント
 

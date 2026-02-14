@@ -93,7 +93,7 @@ Read APIs:
 - Active contract set: `contracts/v1/*`
 - Contract runtime version: `v=1`
 - OpenAPI schema source: `openapi/v1.yaml` references `contracts/v1/*` directly
-- `GET /v1/contracts` is generated from embedded OpenAPI/contracts sources and exposes source hashes
+- `GET /v1/contracts` is generated from a build-time manifest derived from OpenAPI/contracts sources and exposes source hashes
 - Compatibility policy: `docs/contract-compatibility-policy.md`
 
 ## Storage
@@ -103,8 +103,8 @@ Supported stores:
 - `memory`
 - `sqlite`
 
-Any other `store.type` fails at startup.
-When `store.type=sqlite`, `store.sqlite_path` is required.
+Any other `store.kind` fails at startup.
+When `store.kind=sqlite`, `store.sqlite_path` is required.
 
 SQLite migration baseline:
 
@@ -125,6 +125,7 @@ Verify audit chain:
 
 ```bash
 arbiter audit-verify --path ./arbiter-audit.jsonl
+arbiter audit-verify --path ./arbiter-audit.jsonl --mirror-path ./arbiter-audit-mirror.jsonl
 ```
 
 ## Quick start
@@ -155,8 +156,10 @@ Run CI-equivalent checks:
 ```bash
 mise run fmt-check
 mise run lint
+mise run contracts-verify
 mise run test
 mise run build
+mise run ci
 ```
 
 ## Release automation
@@ -164,6 +167,7 @@ mise run build
 - Push a SemVer tag (for example, `v1.1.0`) to trigger the release workflow.
 - CI validates tag/Cargo/OpenAPI version consistency before publishing.
 - GitHub Release notes are generated automatically and include attached binary/checksum artifacts.
+- Changelog and release scope: `CHANGELOG.md`, `docs/releases/v1.1.0.md`
 
 ## Operations
 
