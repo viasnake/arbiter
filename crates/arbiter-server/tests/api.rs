@@ -931,6 +931,56 @@ async fn approval_expired_event_sets_escalation_debug_field() {
 }
 
 #[tokio::test]
+async fn job_state_endpoint_returns_latest_state() {
+    let app = build_app(test_config()).await.unwrap();
+
+    let update = Request::builder()
+        .method("POST")
+        .uri("/v1/job-events")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "v": 1,
+                "event_id": "job-state-evt-1",
+                "tenant_id": "tenant-a",
+                "job_id": "job-42",
+                "status": "started",
+                "ts": "2026-02-14T00:00:00Z"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let _ = app.clone().oneshot(update).await.unwrap();
+
+    let read = Request::builder()
+        .method("GET")
+        .uri("/v1/jobs/tenant-a/job-42")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(read).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["id"], "job-42");
+    assert_eq!(v["tenant_id"], "tenant-a");
+    assert_eq!(v["status"], "started");
+}
+
+#[tokio::test]
+async fn approval_state_endpoint_returns_404_when_missing() {
+    let app = build_app(test_config()).await.unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/approvals/tenant-a/missing")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn immutable_mirror_sink_receives_audit_lines() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

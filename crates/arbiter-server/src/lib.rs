@@ -14,7 +14,7 @@ use arbiter_kernel::{
     planner_probability, planner_seed, request_approval_plan, request_generation_plan, send_plan,
     start_agent_job_plan, GateConfig, GateDecision, Intent, PlannerConfig, RoomState,
 };
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -55,6 +55,11 @@ pub async fn build_app(cfg: Config) -> Result<Router, String> {
         .route("/v1/approval-events", post(approval_events))
         .route("/v1/action-results", post(action_results))
         .route("/v1/contracts", get(contracts))
+        .route("/v1/jobs/{tenant_id}/{job_id}", get(job_state))
+        .route(
+            "/v1/approvals/{tenant_id}/{approval_id}",
+            get(approval_state),
+        )
         .with_state(state))
 }
 
@@ -592,6 +597,80 @@ async fn contracts() -> Json<Value> {
     }))
 }
 
+async fn job_state(
+    State(state): State<AppState>,
+    Path((tenant_id, job_id)): Path<(String, String)>,
+) -> Result<Json<StateResponse>, (StatusCode, Json<Value>)> {
+    if tenant_id.is_empty() || job_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code":"validation_error","message":"tenant_id and job_id are required"}})),
+        ));
+    }
+
+    let entry = {
+        let store = state.store.lock().await;
+        store.get_job_state(&tenant_id, &job_id)
+    }
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code":"validation_error","message": e}})),
+        )
+    })?;
+
+    match entry {
+        Some(v) => Ok(Json(StateResponse {
+            id: job_id,
+            tenant_id,
+            status: v.status,
+            reason_code: v.reason_code,
+            updated_at: v.updated_at,
+        })),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": {"code":"not_found","message":"job state not found"}})),
+        )),
+    }
+}
+
+async fn approval_state(
+    State(state): State<AppState>,
+    Path((tenant_id, approval_id)): Path<(String, String)>,
+) -> Result<Json<StateResponse>, (StatusCode, Json<Value>)> {
+    if tenant_id.is_empty() || approval_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code":"validation_error","message":"tenant_id and approval_id are required"}})),
+        ));
+    }
+
+    let entry = {
+        let store = state.store.lock().await;
+        store.get_approval_state(&tenant_id, &approval_id)
+    }
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code":"validation_error","message": e}})),
+        )
+    })?;
+
+    match entry {
+        Some(v) => Ok(Json(StateResponse {
+            id: approval_id,
+            tenant_id,
+            status: v.status,
+            reason_code: v.reason_code,
+            updated_at: v.updated_at,
+        })),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": {"code":"not_found","message":"approval state not found"}})),
+        )),
+    }
+}
+
 async fn events(
     State(state): State<AppState>,
     Json(event): Json<Event>,
@@ -756,10 +835,18 @@ struct PendingGeneration {
 
 #[derive(Debug, Clone)]
 struct StateEntry {
-    #[allow(dead_code)]
     status: String,
-    #[allow(dead_code)]
     reason_code: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Serialize)]
+struct StateResponse {
+    id: String,
+    tenant_id: String,
+    status: String,
+    reason_code: Option<String>,
+    updated_at: String,
 }
 
 impl StoreBackend {
@@ -852,6 +939,7 @@ impl StoreBackend {
         reason_code: Option<&str>,
     ) -> Result<(), String> {
         let key = format!("{tenant_id}:{job_id}");
+        let updated_at = Utc::now().to_rfc3339();
         match self {
             StoreBackend::Memory(store) => {
                 store.job_states.insert(
@@ -859,6 +947,7 @@ impl StoreBackend {
                     StateEntry {
                         status: status.to_string(),
                         reason_code: reason_code.map(|v| v.to_string()),
+                        updated_at,
                     },
                 );
                 Ok(())
@@ -877,6 +966,7 @@ impl StoreBackend {
         reason_code: Option<&str>,
     ) -> Result<(), String> {
         let key = format!("{tenant_id}:{approval_id}");
+        let updated_at = Utc::now().to_rfc3339();
         match self {
             StoreBackend::Memory(store) => {
                 store.approval_states.insert(
@@ -884,6 +974,7 @@ impl StoreBackend {
                     StateEntry {
                         status: status.to_string(),
                         reason_code: reason_code.map(|v| v.to_string()),
+                        updated_at,
                     },
                 );
                 Ok(())
@@ -891,6 +982,26 @@ impl StoreBackend {
             StoreBackend::Sqlite(store) => {
                 store.save_approval_state(tenant_id, approval_id, status, reason_code)
             }
+        }
+    }
+
+    fn get_job_state(&self, tenant_id: &str, job_id: &str) -> Result<Option<StateEntry>, String> {
+        let key = format!("{tenant_id}:{job_id}");
+        match self {
+            StoreBackend::Memory(store) => Ok(store.job_states.get(&key).cloned()),
+            StoreBackend::Sqlite(store) => store.get_job_state(tenant_id, job_id),
+        }
+    }
+
+    fn get_approval_state(
+        &self,
+        tenant_id: &str,
+        approval_id: &str,
+    ) -> Result<Option<StateEntry>, String> {
+        let key = format!("{tenant_id}:{approval_id}");
+        match self {
+            StoreBackend::Memory(store) => Ok(store.approval_states.get(&key).cloned()),
+            StoreBackend::Sqlite(store) => store.get_approval_state(tenant_id, approval_id),
         }
     }
 }
@@ -1163,6 +1274,44 @@ impl SqliteStore {
             )
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn get_job_state(&self, tenant_id: &str, job_id: &str) -> Result<Option<StateEntry>, String> {
+        self.conn
+            .query_row(
+                "SELECT status, reason_code, updated_at FROM job_states WHERE tenant_id = ?1 AND job_id = ?2",
+                params![tenant_id, job_id],
+                |row| {
+                    Ok(StateEntry {
+                        status: row.get(0)?,
+                        reason_code: row.get(1)?,
+                        updated_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    fn get_approval_state(
+        &self,
+        tenant_id: &str,
+        approval_id: &str,
+    ) -> Result<Option<StateEntry>, String> {
+        self.conn
+            .query_row(
+                "SELECT status, reason_code, updated_at FROM approval_states WHERE tenant_id = ?1 AND approval_id = ?2",
+                params![tenant_id, approval_id],
+                |row| {
+                    Ok(StateEntry {
+                        status: row.get(0)?,
+                        reason_code: row.get(1)?,
+                        updated_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())
     }
 }
 
