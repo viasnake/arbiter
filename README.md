@@ -180,6 +180,7 @@ mise run ci
 - SLO draft: `docs/slo.md`
 - Runbook: `docs/runbook.md`
 - AuthZ resilience policy: `docs/authz-resilience.md`
+- Error codes: `docs/errors.md`
 - State semantics: `docs/state/events.md`, `docs/state/jobs.md`, `docs/state/approvals.md`, `docs/state/action-results.md`
 - Audit mirror semantics: `docs/audit-mirror.md`
 - Contracts metadata generation: `docs/contracts-metadata.md`

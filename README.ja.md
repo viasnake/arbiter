@@ -180,6 +180,7 @@ mise run ci
 - SLO: `docs/slo.md`
 - Runbook: `docs/runbook.md`
 - AuthZ 耐障害ポリシー: `docs/authz-resilience.md`
+- エラーコード: `docs/errors.md`
 - 状態セマンティクス: `docs/state/events.md`, `docs/state/jobs.md`, `docs/state/approvals.md`, `docs/state/action-results.md`
 - 監査 mirror セマンティクス: `docs/audit-mirror.md`
 - Contracts メタデータ生成: `docs/contracts-metadata.md`
