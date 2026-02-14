@@ -2,6 +2,8 @@ use arbiter_config::{Audit, Authz, AuthzCache, Config, Gate, Planner, Server, St
 use arbiter_server::build_app;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use axum::routing::post;
+use axum::{Json, Router};
 use jsonschema::Validator;
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -60,6 +62,27 @@ fn test_config_sqlite(db_path: &str) -> Config {
     cfg.store.kind = "sqlite".to_string();
     cfg.store.sqlite_path = Some(db_path.to_string());
     cfg
+}
+
+async fn spawn_mock_authz_invalid_policy_version() -> String {
+    async fn handler() -> Json<Value> {
+        Json(json!({
+            "v": 0,
+            "decision": "allow",
+            "reason_code": "ok",
+            "policy_version": "",
+            "obligations": {},
+            "ttl_ms": 1000
+        }))
+    }
+
+    let app = Router::new().route("/v0/authorize", post(handler));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/v0/authorize")
 }
 
 fn sample_event(event_id: &str) -> Value {
@@ -410,4 +433,35 @@ async fn sqlite_store_persists_audit_records() {
         .query_row("SELECT COUNT(*) FROM audit_records", [], |row| row.get(0))
         .unwrap();
     assert!(count >= 1);
+}
+
+#[tokio::test]
+async fn external_authz_invalid_contract_is_denied_in_fail_closed_mode() {
+    let endpoint = spawn_mock_authz_invalid_policy_version().await;
+    let mut cfg = test_config();
+    cfg.authz.mode = "external_http".to_string();
+    cfg.authz.endpoint = Some(endpoint);
+    cfg.authz.fail_mode = "deny".to_string();
+    cfg.authz.cache.enabled = false;
+
+    let app = build_app(cfg).await.unwrap();
+    let event = sample_event("evt-authz-invalid-contract");
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(plan["actions"][0]["type"], "do_nothing");
+    assert_eq!(
+        plan["actions"][0]["payload"]["reason_code"],
+        "authz_contract_invalid_deny"
+    );
 }

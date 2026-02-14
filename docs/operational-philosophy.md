@@ -12,6 +12,9 @@ Fail behavior is explicit and configured with `authz.fail_mode`.
 
 Recommended production posture is fail-closed (`deny`).
 
+When non-closed fail modes are used (`allow`, `fallback_builtin`),
+the resulting decision reason must remain explicit in audit records.
+
 ## Idempotency as an operational invariant
 
 Retries are normal in distributed systems.

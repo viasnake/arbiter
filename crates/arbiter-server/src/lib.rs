@@ -808,7 +808,7 @@ impl AuthzEngine {
 
         let endpoint = match &self.endpoint {
             Some(v) if !v.is_empty() => v,
-            _ => return self.on_failure(),
+            _ => return self.on_failure("authz_unconfigured"),
         };
 
         let request = AuthZRequest {
@@ -840,16 +840,26 @@ impl AuthzEngine {
 
         let response = match self.client.post(endpoint).json(&request).send().await {
             Ok(v) => v,
-            Err(_) => return self.on_failure(),
+            Err(_) => return self.on_failure("authz_transport_error"),
         };
         if !response.status().is_success() {
-            return self.on_failure();
+            return self.on_failure("authz_http_error");
         }
 
         let decision: AuthZDecision = match response.json().await {
             Ok(v) => v,
-            Err(_) => return self.on_failure(),
+            Err(_) => return self.on_failure("authz_contract_parse_error"),
         };
+        if decision.v != CONTRACT_VERSION {
+            return self.on_failure("authz_contract_invalid");
+        }
+        if decision.decision != "allow" && decision.decision != "deny" {
+            return self.on_failure("authz_contract_invalid");
+        }
+        if decision.policy_version.trim().is_empty() {
+            return self.on_failure("authz_contract_invalid");
+        }
+
         let outcome = AuthzOutcome {
             allow: decision.decision == "allow",
             reason_code: if decision.reason_code.is_empty() {
@@ -885,21 +895,21 @@ impl AuthzEngine {
         outcome
     }
 
-    fn on_failure(&self) -> AuthzOutcome {
+    fn on_failure(&self, reason: &str) -> AuthzOutcome {
         match self.fail_mode.as_str() {
             "allow" => AuthzOutcome {
                 allow: true,
-                reason_code: "authz_error_allow".to_string(),
+                reason_code: format!("{reason}_allow"),
                 policy_version: None,
             },
             "fallback_builtin" => AuthzOutcome {
                 allow: true,
-                reason_code: "authz_error_fallback_builtin".to_string(),
+                reason_code: format!("{reason}_fallback_builtin"),
                 policy_version: Some("builtin:fallback".to_string()),
             },
             _ => AuthzOutcome {
                 allow: false,
-                reason_code: "authz_error_deny".to_string(),
+                reason_code: format!("{reason}_deny"),
                 policy_version: None,
             },
         }
