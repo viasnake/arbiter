@@ -157,6 +157,12 @@ mise run test
 mise run build
 ```
 
+## リリース自動化
+
+- SemVer タグ（例: `v1.0.0`）を push すると release workflow が起動します。
+- 公開前に tag/Cargo/OpenAPI のバージョン整合を検証します。
+- GitHub Release notes は自動生成され、バイナリと checksum を添付します。
+
 ## 運用
 
 - SLO: `docs/slo.md`

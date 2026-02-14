@@ -157,6 +157,12 @@ mise run test
 mise run build
 ```
 
+## Release automation
+
+- Push a SemVer tag (for example, `v1.0.0`) to trigger the release workflow.
+- CI validates tag/Cargo/OpenAPI version consistency before publishing.
+- GitHub Release notes are generated automatically and include attached binary/checksum artifacts.
+
 ## Operations
 
 - SLO draft: `docs/slo.md`
