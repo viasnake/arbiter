@@ -23,11 +23,12 @@ This separation makes behavior diagnosable and safer to evolve.
 
 ## Scope of v0.0.1
 
-Store support in v0.0.1:
+Store support:
 
-- `memory` only
+- `memory`
+- `sqlite`
 
-Any other `store.type` value is rejected at startup.
+Any other `store.type` value is rejected at startup. When `store.type=sqlite`, `store.sqlite_path` is required.
 
 Implemented action types:
 

@@ -19,6 +19,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use reqwest::Client;
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
@@ -54,17 +55,27 @@ pub async fn build_app(cfg: Config) -> Result<Router, String> {
 #[derive(Clone)]
 struct AppState {
     cfg: Config,
-    store: Arc<Mutex<MemoryStore>>,
+    store: Arc<Mutex<StoreBackend>>,
     audit: Arc<AuditJsonl>,
     authz: Arc<AuthzEngine>,
 }
 
 impl AppState {
     async fn new(cfg: Config) -> Result<Self, String> {
+        let store = if cfg.store.kind == "sqlite" {
+            let sqlite_path = cfg
+                .store
+                .sqlite_path
+                .clone()
+                .ok_or_else(|| "store.sqlite_path is required for sqlite store".to_string())?;
+            StoreBackend::Sqlite(SqliteStore::new(&sqlite_path)?)
+        } else {
+            StoreBackend::Memory(MemoryStore::default())
+        };
         Ok(Self {
             authz: Arc::new(AuthzEngine::new(&cfg)?),
             audit: Arc::new(AuditJsonl::new(&cfg.audit.jsonl_path).await?),
-            store: Arc::new(Mutex::new(MemoryStore::default())),
+            store: Arc::new(Mutex::new(store)),
             cfg,
         })
     }
@@ -74,10 +85,7 @@ impl AppState {
 
         if let Some(existing) = {
             let store = self.store.lock().await;
-            store
-                .idempotency
-                .get(&event_key(&event.tenant_id, &event.event_id))
-                .cloned()
+            store.get_idempotency(&event_key(&event.tenant_id, &event.event_id))
         } {
             self.audit
                 .append(AuditRecord::new(
@@ -97,13 +105,9 @@ impl AppState {
 
         let mut store = self.store.lock().await;
         let room_key = room_key(&event.tenant_id, &event.room_id);
-        let room = store.rooms.get(&room_key).cloned().unwrap_or_default();
-        let tenant_count = store
-            .tenant_rate
-            .get(&event.tenant_id)
-            .and_then(|m| m.get(&minute_bucket(server_now)))
-            .copied()
-            .unwrap_or(0);
+        let tenant_bucket = minute_bucket(server_now);
+        let room = store.get_room(&room_key);
+        let tenant_count = store.get_tenant_rate_count(&event.tenant_id, tenant_bucket);
 
         let gate_cfg = GateConfig {
             cooldown_ms: self.cfg.gate.cooldown_ms,
@@ -120,8 +124,8 @@ impl AppState {
                 reason_code,
             );
             store
-                .idempotency
-                .insert(event_key(&event.tenant_id, &event.event_id), plan.clone());
+                .save_idempotency(event_key(&event.tenant_id, &event.event_id), &plan)
+                .map_err(|e| e.to_string())?;
             drop(store);
 
             self.audit
@@ -158,8 +162,8 @@ impl AppState {
             );
             let mut store = self.store.lock().await;
             store
-                .idempotency
-                .insert(event_key(&event.tenant_id, &event.event_id), plan.clone());
+                .save_idempotency(event_key(&event.tenant_id, &event.event_id), &plan)
+                .map_err(|e| e.to_string())?;
             drop(store);
 
             self.audit
@@ -217,33 +221,34 @@ impl AppState {
         let mut store = self.store.lock().await;
         if matches!(intent, Intent::Reply | Intent::Message) {
             let action = &plan.actions[0];
-            let room_state = store.rooms.entry(room_key).or_default();
+            let mut room_state = store.get_room(&room_key);
             room_state.generating = true;
             room_state.pending_queue_size += 1;
+            store
+                .save_room(&room_key, &room_state)
+                .map_err(|e| e.to_string())?;
 
-            store.pending.insert(
-                pending_key(&event.tenant_id, &action.action_id),
-                PendingGeneration {
-                    tenant_id: event.tenant_id.clone(),
-                    room_id: event.room_id.clone(),
-                    action_id: action.action_id.clone(),
-                    reply_to: event.content.reply_to.clone(),
-                    intent,
-                },
-            );
+            store
+                .save_pending(
+                    pending_key(&event.tenant_id, &action.action_id),
+                    PendingGeneration {
+                        tenant_id: event.tenant_id.clone(),
+                        room_id: event.room_id.clone(),
+                        action_id: action.action_id.clone(),
+                        reply_to: event.content.reply_to.clone(),
+                        intent,
+                    },
+                )
+                .map_err(|e| e.to_string())?;
         }
 
         store
-            .tenant_rate
-            .entry(event.tenant_id.clone())
-            .or_default()
-            .entry(minute_bucket(server_now))
-            .and_modify(|v| *v += 1)
-            .or_insert(1);
+            .increment_tenant_rate(&event.tenant_id, tenant_bucket)
+            .map_err(|e| e.to_string())?;
 
         store
-            .idempotency
-            .insert(event_key(&event.tenant_id, &event.event_id), plan.clone());
+            .save_idempotency(event_key(&event.tenant_id, &event.event_id), &plan)
+            .map_err(|e| e.to_string())?;
         drop(store);
 
         self.audit
@@ -292,7 +297,7 @@ impl AppState {
 
         let mut store = self.store.lock().await;
         let key = pending_key(&input.tenant_id, &input.action_id);
-        let pending = match store.pending.remove(&key) {
+        let pending = match store.take_pending(&key).map_err(|e| e.to_string())? {
             Some(v) => v,
             None => {
                 drop(store);
@@ -316,15 +321,16 @@ impl AppState {
             }
         };
 
-        let room_state = store
-            .rooms
-            .entry(room_key(&pending.tenant_id, &pending.room_id))
-            .or_default();
+        let pending_room_key = room_key(&pending.tenant_id, &pending.room_id);
+        let mut room_state = store.get_room(&pending_room_key);
         if room_state.pending_queue_size > 0 {
             room_state.pending_queue_size -= 1;
         }
         room_state.generating = room_state.pending_queue_size > 0;
         room_state.last_send_at = Some(Utc::now());
+        store
+            .save_room(&pending_room_key, &room_state)
+            .map_err(|e| e.to_string())?;
         drop(store);
 
         let plan = send_plan(
@@ -434,6 +440,16 @@ struct MemoryStore {
     tenant_rate: HashMap<String, HashMap<i64, usize>>,
 }
 
+enum StoreBackend {
+    Memory(MemoryStore),
+    Sqlite(SqliteStore),
+}
+
+struct SqliteStore {
+    conn: Connection,
+}
+
+#[derive(Debug, Clone)]
 struct PendingGeneration {
     tenant_id: String,
     room_id: String,
@@ -441,6 +457,286 @@ struct PendingGeneration {
     reply_to: Option<String>,
     #[allow(dead_code)]
     intent: Intent,
+}
+
+impl StoreBackend {
+    fn get_idempotency(&self, key: &str) -> Option<ResponsePlan> {
+        match self {
+            StoreBackend::Memory(store) => store.idempotency.get(key).cloned(),
+            StoreBackend::Sqlite(store) => store.get_idempotency(key).ok().flatten(),
+        }
+    }
+
+    fn save_idempotency(&mut self, key: String, plan: &ResponsePlan) -> Result<(), String> {
+        match self {
+            StoreBackend::Memory(store) => {
+                store.idempotency.insert(key, plan.clone());
+                Ok(())
+            }
+            StoreBackend::Sqlite(store) => store.save_idempotency(&key, plan),
+        }
+    }
+
+    fn get_room(&self, key: &str) -> RoomState {
+        match self {
+            StoreBackend::Memory(store) => store.rooms.get(key).cloned().unwrap_or_default(),
+            StoreBackend::Sqlite(store) => store.get_room(key).unwrap_or_default(),
+        }
+    }
+
+    fn save_room(&mut self, key: &str, room: &RoomState) -> Result<(), String> {
+        match self {
+            StoreBackend::Memory(store) => {
+                store.rooms.insert(key.to_string(), room.clone());
+                Ok(())
+            }
+            StoreBackend::Sqlite(store) => store.save_room(key, room),
+        }
+    }
+
+    fn get_tenant_rate_count(&self, tenant_id: &str, bucket: i64) -> usize {
+        match self {
+            StoreBackend::Memory(store) => store
+                .tenant_rate
+                .get(tenant_id)
+                .and_then(|m| m.get(&bucket))
+                .copied()
+                .unwrap_or(0),
+            StoreBackend::Sqlite(store) => {
+                store.get_tenant_rate_count(tenant_id, bucket).unwrap_or(0)
+            }
+        }
+    }
+
+    fn increment_tenant_rate(&mut self, tenant_id: &str, bucket: i64) -> Result<(), String> {
+        match self {
+            StoreBackend::Memory(store) => {
+                store
+                    .tenant_rate
+                    .entry(tenant_id.to_string())
+                    .or_default()
+                    .entry(bucket)
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+                Ok(())
+            }
+            StoreBackend::Sqlite(store) => store.increment_tenant_rate(tenant_id, bucket),
+        }
+    }
+
+    fn save_pending(&mut self, key: String, pending: PendingGeneration) -> Result<(), String> {
+        match self {
+            StoreBackend::Memory(store) => {
+                store.pending.insert(key, pending);
+                Ok(())
+            }
+            StoreBackend::Sqlite(store) => store.save_pending(&key, &pending),
+        }
+    }
+
+    fn take_pending(&mut self, key: &str) -> Result<Option<PendingGeneration>, String> {
+        match self {
+            StoreBackend::Memory(store) => Ok(store.pending.remove(key)),
+            StoreBackend::Sqlite(store) => store.take_pending(key),
+        }
+    }
+}
+
+impl SqliteStore {
+    fn new(path: &str) -> Result<Self, String> {
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS idempotency (
+                event_key TEXT PRIMARY KEY,
+                plan_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rooms (
+                room_key TEXT PRIMARY KEY,
+                generating INTEGER NOT NULL,
+                pending_queue_size INTEGER NOT NULL,
+                last_send_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS pending_generations (
+                pending_key TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                reply_to TEXT,
+                intent TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS tenant_rate (
+                tenant_id TEXT NOT NULL,
+                bucket INTEGER NOT NULL,
+                count INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, bucket)
+            );
+            ",
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Self { conn })
+    }
+
+    fn get_idempotency(&self, key: &str) -> Result<Option<ResponsePlan>, String> {
+        let plan_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT plan_json FROM idempotency WHERE event_key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match plan_json {
+            Some(v) => {
+                let plan: ResponsePlan = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+                Ok(Some(plan))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn save_idempotency(&mut self, key: &str, plan: &ResponsePlan) -> Result<(), String> {
+        let json = serde_json::to_string(plan).map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO idempotency(event_key, plan_json) VALUES (?1, ?2)",
+                params![key, json],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_room(&self, key: &str) -> Result<RoomState, String> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT generating, pending_queue_size, last_send_at FROM rooms WHERE room_key = ?1",
+                params![key],
+                |row| {
+                    let generating: i64 = row.get(0)?;
+                    let pending_queue_size: i64 = row.get(1)?;
+                    let last_send_at: Option<String> = row.get(2)?;
+                    Ok((generating, pending_queue_size, last_send_at))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        match row {
+            Some((generating, pending_queue_size, last_send_at)) => Ok(RoomState {
+                generating: generating != 0,
+                pending_queue_size: pending_queue_size as usize,
+                last_send_at: last_send_at.and_then(|v| parse_event_ts(&v)),
+            }),
+            None => Ok(RoomState::default()),
+        }
+    }
+
+    fn save_room(&mut self, key: &str, room: &RoomState) -> Result<(), String> {
+        let last_send_at = room.last_send_at.map(|v| v.to_rfc3339());
+        self.conn
+            .execute(
+                "
+                INSERT INTO rooms(room_key, generating, pending_queue_size, last_send_at)
+                VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(room_key) DO UPDATE SET
+                    generating=excluded.generating,
+                    pending_queue_size=excluded.pending_queue_size,
+                    last_send_at=excluded.last_send_at
+                ",
+                params![
+                    key,
+                    if room.generating { 1 } else { 0 },
+                    room.pending_queue_size as i64,
+                    last_send_at
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_tenant_rate_count(&self, tenant_id: &str, bucket: i64) -> Result<usize, String> {
+        let count: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT count FROM tenant_rate WHERE tenant_id = ?1 AND bucket = ?2",
+                params![tenant_id, bucket],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(count.unwrap_or(0) as usize)
+    }
+
+    fn increment_tenant_rate(&mut self, tenant_id: &str, bucket: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "
+                INSERT INTO tenant_rate(tenant_id, bucket, count)
+                VALUES (?1, ?2, 1)
+                ON CONFLICT(tenant_id, bucket) DO UPDATE SET count = count + 1
+                ",
+                params![tenant_id, bucket],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn save_pending(&mut self, key: &str, pending: &PendingGeneration) -> Result<(), String> {
+        self.conn
+            .execute(
+                "
+                INSERT OR REPLACE INTO pending_generations
+                (pending_key, tenant_id, room_id, action_id, reply_to, intent)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ",
+                params![
+                    key,
+                    pending.tenant_id,
+                    pending.room_id,
+                    pending.action_id,
+                    pending.reply_to,
+                    intent_name(pending.intent)
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn take_pending(&mut self, key: &str) -> Result<Option<PendingGeneration>, String> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT tenant_id, room_id, action_id, reply_to, intent FROM pending_generations WHERE pending_key = ?1",
+                params![key],
+                |row| {
+                    Ok(PendingGeneration {
+                        tenant_id: row.get(0)?,
+                        room_id: row.get(1)?,
+                        action_id: row.get(2)?,
+                        reply_to: row.get(3)?,
+                        intent: match row.get::<_, String>(4)?.as_str() {
+                            "REPLY" => Intent::Reply,
+                            "MESSAGE" => Intent::Message,
+                            _ => Intent::Ignore,
+                        },
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        if row.is_some() {
+            self.conn
+                .execute(
+                    "DELETE FROM pending_generations WHERE pending_key = ?1",
+                    params![key],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(row)
+    }
 }
 
 #[derive(Debug, Clone)]

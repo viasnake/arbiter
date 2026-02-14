@@ -89,8 +89,23 @@ pub fn load_and_validate(path: &str) -> Result<Config, ConfigError> {
 }
 
 fn validate_against_schema(instance: &serde_json::Value) -> Result<(), ConfigError> {
-    let schema_text = std::fs::read_to_string("config/config.schema.json")
-        .map_err(|e| ConfigError::SchemaLoad(e.to_string()))?;
+    let schema_path = [
+        std::path::PathBuf::from("config/config.schema.json"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("config/config.schema.json"),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+    .ok_or_else(|| {
+        ConfigError::SchemaLoad(
+            "config schema not found at config/config.schema.json or workspace config path"
+                .to_string(),
+        )
+    })?;
+
+    let schema_text =
+        std::fs::read_to_string(schema_path).map_err(|e| ConfigError::SchemaLoad(e.to_string()))?;
     let schema: serde_json::Value =
         serde_json::from_str(&schema_text).map_err(|e| ConfigError::SchemaLoad(e.to_string()))?;
 
@@ -103,15 +118,27 @@ fn validate_against_schema(instance: &serde_json::Value) -> Result<(), ConfigErr
 }
 
 fn validate_runtime_support(cfg: &Config) -> Result<(), ConfigError> {
-    if cfg.store.kind != "memory" {
+    if cfg.store.kind != "memory" && cfg.store.kind != "sqlite" {
         return Err(ConfigError::UnsupportedConfig(format!(
-            "store.type={} is not implemented in v0.0.1; supported: memory",
+            "store.type={} is not implemented; supported: memory, sqlite",
             cfg.store.kind
         )));
     }
-    if cfg.store.sqlite_path.is_some() {
+    if cfg.store.kind == "memory" && cfg.store.sqlite_path.is_some() {
         return Err(ConfigError::UnsupportedConfig(
             "store.sqlite_path is not supported when store.type=memory".to_string(),
+        ));
+    }
+    if cfg.store.kind == "sqlite"
+        && cfg
+            .store
+            .sqlite_path
+            .as_ref()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+    {
+        return Err(ConfigError::UnsupportedConfig(
+            "store.sqlite_path is required when store.type=sqlite".to_string(),
         ));
     }
     Ok(())
@@ -167,18 +194,14 @@ audit:
     }
 
     #[test]
-    fn rejects_sqlite_store_type() {
+    fn supports_sqlite_store_type_with_path() {
         let path = write_temp_config(&base_yaml().replace(
             "type: \"memory\"",
             "type: \"sqlite\"\n  sqlite_path: \"./a.db\"",
         ));
-        let err = load_and_validate(&path).expect_err("expected unsupported config");
-        assert!(matches!(
-            err,
-            ConfigError::SchemaLoad(_)
-                | ConfigError::SchemaValidation(_)
-                | ConfigError::UnsupportedConfig(_)
-        ));
+        let cfg = load_and_validate(&path).expect("sqlite config should be accepted");
+        assert_eq!(cfg.store.kind, "sqlite");
+        assert_eq!(cfg.store.sqlite_path.as_deref(), Some("./a.db"));
     }
 
     #[test]

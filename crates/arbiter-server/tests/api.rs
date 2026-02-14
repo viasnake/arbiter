@@ -54,6 +54,13 @@ fn test_config_with_authz_audit(include_authz_decision: bool) -> Config {
     }
 }
 
+fn test_config_sqlite(db_path: &str) -> Config {
+    let mut cfg = test_config();
+    cfg.store.kind = "sqlite".to_string();
+    cfg.store.sqlite_path = Some(db_path.to_string());
+    cfg
+}
+
 fn sample_event(event_id: &str) -> Value {
     json!({
         "v": 0,
@@ -332,4 +339,46 @@ async fn cooldown_uses_server_time_even_when_event_ts_is_future_or_past() {
             "gate_cooldown"
         );
     }
+}
+
+#[tokio::test]
+async fn sqlite_store_keeps_idempotency_across_app_restart() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let db_path = std::env::temp_dir().join(format!("arbiter-store-{nanos}.db"));
+    let db_path_str = db_path.to_string_lossy().to_string();
+
+    let event = sample_event("evt-sqlite-persist");
+
+    let app1 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res1 = app1.oneshot(req1).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+    let body1 = axum::body::to_bytes(res1.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let p1: Value = serde_json::from_slice(&body1).unwrap();
+
+    let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res2 = app2.oneshot(req2).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+    let body2 = axum::body::to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let p2: Value = serde_json::from_slice(&body2).unwrap();
+
+    assert_eq!(p1, p2);
 }
