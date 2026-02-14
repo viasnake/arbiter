@@ -1,19 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/config/v1/config.schema.json",
-  "title": "Arbiter Configuration Schema v1.1.0",
+  "$id": "https://arbiter.dev/config/v1.2.0/config.schema.json",
+  "title": "Arbiter Configuration Schema v1.2.0",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "server",
-    "store",
-    "authz",
-    "gate",
-    "planner",
-    "audit"
-  ],
+  "required": ["server", "store", "governance", "policy", "audit"],
   "properties": {
-
     "server": {
       "type": "object",
       "additionalProperties": false,
@@ -21,186 +13,79 @@
       "properties": {
         "listen_addr": {
           "type": "string",
-          "description": "Bind address (host:port)",
           "default": "0.0.0.0:8080"
         }
       }
     },
-
     "store": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type"],
+      "required": ["kind"],
       "properties": {
-        "type": {
+        "kind": {
           "type": "string",
           "enum": ["memory", "sqlite"]
         },
         "sqlite_path": {
-          "type": "string",
-          "description": "Path to sqlite database file"
+          "type": "string"
         }
       },
       "allOf": [
         {
-          "if": { "properties": { "type": { "const": "sqlite" } } },
+          "if": { "properties": { "kind": { "const": "sqlite" } } },
           "then": { "required": ["sqlite_path"] }
         }
       ]
     },
-
-    "authz": {
+    "governance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "fail_mode"],
+      "required": ["allowed_providers"],
       "properties": {
-        "mode": {
-          "type": "string",
-          "enum": ["builtin", "external_http"]
-        },
-        "endpoint": {
-          "type": "string",
-          "description": "External RBAC provider endpoint (required if mode=external_http)"
-        },
-        "timeout_ms": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 300
-        },
-        "retry_max_attempts": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 1,
-          "description": "Total attempts for external authz request (including first request)"
-        },
-        "retry_backoff_ms": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 0,
-          "description": "Delay between retry attempts"
-        },
-        "circuit_breaker_failures": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 5,
-          "description": "Consecutive authz failures needed to open the circuit"
-        },
-        "circuit_breaker_open_ms": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 30000,
-          "description": "How long to keep authz circuit open after threshold"
-        },
-        "fail_mode": {
-          "type": "string",
-          "enum": ["deny", "allow", "fallback_builtin"],
-          "default": "deny"
-        },
-        "cache": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["enabled"],
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true
-            },
-            "ttl_ms": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 30000
-            },
-            "max_entries": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 100000
-            }
+        "allowed_providers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
           }
         }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "mode": { "const": "external_http" } } },
-          "then": { "required": ["endpoint"] }
-        }
-      ]
-    },
-
-    "gate": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["cooldown_ms", "max_queue"],
-      "properties": {
-        "cooldown_ms": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 3000
-        },
-        "max_queue": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 10
-        },
-        "tenant_rate_limit_per_min": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 0
-        }
       }
     },
-
-    "planner": {
+    "policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["reply_policy"],
+      "required": ["version"],
       "properties": {
-        "reply_policy": {
+        "version": {
           "type": "string",
-          "enum": [
-            "all",
-            "mention_first",
-            "probabilistic",
-            "reply_only"
-          ]
+          "minLength": 1
         },
-        "reply_probability": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1,
-          "default": 0.0
-        },
-        "approval_timeout_ms": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 900000
-        },
-        "approval_escalation_on_expired": {
+        "require_approval_for_write_external": {
           "type": "boolean",
           "default": true
+        },
+        "require_approval_for_notify": {
+          "type": "boolean",
+          "default": false
+        },
+        "require_approval_for_start_job": {
+          "type": "boolean",
+          "default": false
         }
       }
     },
-
     "audit": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sink"],
+      "required": ["jsonl_path"],
       "properties": {
-        "sink": {
-          "type": "string",
-          "enum": ["jsonl"]
-        },
         "jsonl_path": {
           "type": "string",
           "default": "./arbiter-audit.jsonl"
         },
-        "include_authz_decision": {
-          "type": "boolean",
-          "default": true
-        },
         "immutable_mirror_path": {
-          "type": "string",
-          "description": "Optional append-only mirror sink path"
+          "type": "string"
         }
       }
     }

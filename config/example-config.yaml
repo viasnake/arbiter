@@ -2,35 +2,20 @@ server:
   listen_addr: "0.0.0.0:8080"
 
 store:
-  type: "memory"
+  kind: "memory"
 
-authz:
-  mode: "external_http"
-  endpoint: "http://localhost:8081/v1/authorize"
-  timeout_ms: 300
-  retry_max_attempts: 2
-  retry_backoff_ms: 100
-  circuit_breaker_failures: 5
-  circuit_breaker_open_ms: 30000
-  fail_mode: "deny"
-  cache:
-    enabled: true
-    ttl_ms: 30000
-    max_entries: 100000
+governance:
+  allowed_providers:
+    - "generic"
+    - "email"
+    - "chat"
 
-gate:
-  cooldown_ms: 3000
-  max_queue: 10
-  tenant_rate_limit_per_min: 0
-
-planner:
-  reply_policy: "mention_first"
-  reply_probability: 0.3
-  approval_timeout_ms: 900000
-  approval_escalation_on_expired: true
+policy:
+  version: "policy:v1.2.0"
+  require_approval_for_write_external: true
+  require_approval_for_notify: false
+  require_approval_for_start_job: false
 
 audit:
-  sink: "jsonl"
   jsonl_path: "./arbiter-audit.jsonl"
-  include_authz_decision: true
   immutable_mirror_path: null
