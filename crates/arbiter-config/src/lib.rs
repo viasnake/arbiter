@@ -199,6 +199,12 @@ fn validate_runtime_support(cfg: &Config) -> Result<(), ConfigError> {
             "planner.approval_timeout_ms must be >= 1".to_string(),
         ));
     }
+    if cfg.audit.sink != "jsonl" {
+        return Err(ConfigError::UnsupportedConfig(format!(
+            "audit.sink={} is not implemented; supported: jsonl",
+            cfg.audit.sink
+        )));
+    }
     Ok(())
 }
 
@@ -274,6 +280,16 @@ audit:
             ConfigError::SchemaLoad(_)
                 | ConfigError::SchemaValidation(_)
                 | ConfigError::UnsupportedConfig(_)
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_audit_sink_at_runtime() {
+        let path = write_temp_config(&base_yaml().replace("sink: \"jsonl\"", "sink: \"stdout\""));
+        let err = load_and_validate(&path).expect_err("expected unsupported config");
+        assert!(matches!(
+            err,
+            ConfigError::SchemaValidation(_) | ConfigError::UnsupportedConfig(_)
         ));
     }
 }
