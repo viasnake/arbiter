@@ -23,6 +23,12 @@ This separation makes behavior diagnosable and safer to evolve.
 
 ## Scope of v0.0.1
 
+Store support in v0.0.1:
+
+- `memory` only
+
+Any other `store.type` value is rejected at startup.
+
 Implemented action types:
 
 - `do_nothing`
@@ -34,6 +40,15 @@ Reserved (not implemented in behavior):
 
 - `start_agent_job`
 - `request_approval`
+
+## Contract versioning policy
+
+Contracts under `contracts/` are the long-lived compatibility boundary.
+
+- Non-breaking additions can be released in minor versions.
+- Breaking contract changes require a major version bump.
+- Deprecations must be documented before removal.
+- v0 still treats breaking changes as exceptional and explicitly documented in changelog and decision log.
 
 ## Quick start
 
