@@ -78,15 +78,22 @@ struct AppState {
 
 impl AppState {
     async fn new(cfg: Config) -> Result<Self, String> {
-        let store = if cfg.store.kind == "sqlite" {
-            let sqlite_path = cfg
-                .store
-                .sqlite_path
-                .clone()
-                .ok_or_else(|| "store.sqlite_path is required for sqlite store".to_string())?;
-            StoreBackend::Sqlite(SqliteStore::new(&sqlite_path)?)
-        } else {
-            StoreBackend::Memory(Box::default())
+        let store = match cfg.store.kind.as_str() {
+            "memory" => StoreBackend::Memory(Box::default()),
+            "sqlite" => {
+                let sqlite_path = cfg
+                    .store
+                    .sqlite_path
+                    .clone()
+                    .ok_or_else(|| "store.sqlite_path is required for sqlite store".to_string())?;
+                StoreBackend::Sqlite(SqliteStore::new(&sqlite_path)?)
+            }
+            _ => {
+                return Err(format!(
+                    "config.invalid_store_kind: unsupported store.kind `{}` (expected memory|sqlite)",
+                    cfg.store.kind
+                ));
+            }
         };
         Ok(Self {
             authz: Arc::new(AuthzEngine::new(&cfg)?),
@@ -107,10 +114,35 @@ impl AppState {
     async fn process_event(&self, event: Event) -> Result<ResponsePlan, String> {
         validate_event(&event)?;
 
+        let key = event_key(&event.tenant_id, &event.event_id);
+        let payload_json = canonical_json_string(
+            &serde_json::to_value(&event).map_err(|e| format!("validation_error: {e}"))?,
+        );
+        let incoming_hash = hash_hex(payload_json.as_bytes());
+
         if let Some(existing) = {
             let store = self.store.lock().await;
-            store.get_idempotency(&event_key(&event.tenant_id, &event.event_id))
+            store.get_idempotency(&key)
         } {
+            let maybe_existing_payload = {
+                let store = self.store.lock().await;
+                store.get_event_payload(&key)
+            }
+            .map_err(|e| format!("validation_error: {e}"))?;
+
+            if let Some(existing_payload) = maybe_existing_payload {
+                let existing_hash = if is_sha256_hex(&existing_payload) {
+                    existing_payload
+                } else {
+                    hash_hex(existing_payload.as_bytes())
+                };
+                if existing_hash != incoming_hash {
+                    return Err(format!(
+                        "conflict.payload_mismatch: duplicate event_id has different payload (existing_hash={existing_hash}, incoming_hash={incoming_hash})"
+                    ));
+                }
+            }
+
             self.audit
                 .append(AuditRecord::new(
                     &event.tenant_id,
@@ -149,7 +181,10 @@ impl AppState {
                 reason_code,
             );
             store
-                .save_idempotency(event_key(&event.tenant_id, &event.event_id), &plan)
+                .save_idempotency(key.clone(), &plan)
+                .map_err(|e| e.to_string())?;
+            store
+                .save_event_payload(&key, &incoming_hash)
                 .map_err(|e| e.to_string())?;
             drop(store);
 
@@ -188,7 +223,10 @@ impl AppState {
             );
             let mut store = self.store.lock().await;
             store
-                .save_idempotency(event_key(&event.tenant_id, &event.event_id), &plan)
+                .save_idempotency(key.clone(), &plan)
+                .map_err(|e| e.to_string())?;
+            store
+                .save_event_payload(&key, &incoming_hash)
                 .map_err(|e| e.to_string())?;
             drop(store);
 
@@ -293,7 +331,10 @@ impl AppState {
             .map_err(|e| e.to_string())?;
 
         store
-            .save_idempotency(event_key(&event.tenant_id, &event.event_id), &plan)
+            .save_idempotency(key.clone(), &plan)
+            .map_err(|e| e.to_string())?;
+        store
+            .save_event_payload(&key, &incoming_hash)
             .map_err(|e| e.to_string())?;
         drop(store);
 
@@ -751,12 +792,7 @@ async fn events(
     State(state): State<AppState>,
     Json(event): Json<Event>,
 ) -> Result<Json<ResponsePlan>, (StatusCode, Json<Value>)> {
-    state.process_event(event).await.map(Json).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": {"code":"validation_error","message": e}})),
-        )
-    })
+    state.process_event(event).await.map(Json).map_err(api_error)
 }
 
 async fn generations(
@@ -2599,6 +2635,10 @@ fn action_index_key(tenant_id: &str, action_id: &str) -> String {
 
 fn action_result_store_key(tenant_id: &str, plan_id: &str, action_id: &str) -> String {
     format!("{tenant_id}:{plan_id}:{action_id}")
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn canonical_json_string(value: &Value) -> String {
