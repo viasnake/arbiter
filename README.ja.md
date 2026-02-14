@@ -73,10 +73,17 @@ Arbiter は決定プレーンです。実行は実行プレーンが担います
 
 OpenAPI: `openapi/v1.yaml`
 
+`POST /v1/action-results` のリクエスト契約（v1）:
+
+- 必須: `v`, `plan_id`, `action_id`, `tenant_id`, `status`, `ts`
+- 任意: `provider_message_id`, `reason_code`, `error`
+- `status` 列挙: `succeeded` | `failed` | `skipped`
+
 ## Contracts とバージョニング
 
 - 利用中契約セット: `contracts/v1/*`
 - 実行時契約バージョン: `v=1`
+- OpenAPI の schema source: `openapi/v1.yaml` から `contracts/v1/*` を直接参照
 - 互換性ポリシー: `docs/contract-compatibility-policy.md`
 
 ## ストレージ

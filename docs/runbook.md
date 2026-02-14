@@ -21,6 +21,10 @@
   - Gate decisions use server time; investigate source timestamp only for diagnostics
 - Duplicate events:
   - Verify idempotency hit via audit and identical `plan_id`
+- Invalid action result payloads (`POST /v1/action-results`):
+  - Verify required fields (`v`, `plan_id`, `action_id`, `tenant_id`, `status`, `ts`)
+  - Verify `status` is one of `succeeded`, `failed`, `skipped`
+  - Verify `ts` is RFC3339
 
 ## Recovery guidance
 

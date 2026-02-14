@@ -73,10 +73,17 @@ Arbiter is the decision plane. Execution belongs to the execution plane.
 
 OpenAPI: `openapi/v1.yaml`
 
+`POST /v1/action-results` request contract (v1):
+
+- required: `v`, `plan_id`, `action_id`, `tenant_id`, `status`, `ts`
+- optional: `provider_message_id`, `reason_code`, `error`
+- status enum: `succeeded` | `failed` | `skipped`
+
 ## Contracts and versioning
 
 - Active contract set: `contracts/v1/*`
 - Contract runtime version: `v=1`
+- OpenAPI schema source: `openapi/v1.yaml` references `contracts/v1/*` directly
 - Compatibility policy: `docs/contract-compatibility-policy.md`
 
 ## Storage

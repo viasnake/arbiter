@@ -5,11 +5,15 @@
 Files under `contracts/` and `openapi/` describe current integration shape.
 They can change when needed.
 
+OpenAPI transport schemas are sourced from `contracts/v1/*` via `$ref`.
+This keeps contract and OpenAPI schema definitions in one place.
+
 ## How changes are handled
 
 - Keep changes explicit and documented.
 - Update tests together with contract changes.
 - Prefer small, reviewable contract diffs.
+- Keep `arbiter-contracts` drift guard tests passing.
 
 ## Practical guidance
 
