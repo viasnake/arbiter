@@ -17,6 +17,9 @@ Arbiter publishes governance through `GET /v1/contracts`.
   - `max_payload_hints` (optional)
   - `error_codes` (optional)
 
+`contracts_set_sha256` is computed from the sorted schema set in `contracts/v1/*.schema.json`.
+Each schema contributes `(schema_path, schema_bytes)` to the digest input.
+
 ## Interpretation rules
 
 - Arbiter enforces provider allowlist from config.
