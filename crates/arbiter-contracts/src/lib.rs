@@ -178,6 +178,34 @@ pub struct ApprovalEvent {
     pub reason_code: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionResultError {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(flatten)]
+    pub details: serde_json::Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionResult {
+    pub v: i32,
+    pub plan_id: String,
+    pub action_id: String,
+    pub tenant_id: String,
+    pub status: String,
+    pub ts: String,
+    #[serde(default)]
+    pub provider_message_id: Option<String>,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+    #[serde(default)]
+    pub error: Option<ActionResultError>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +231,7 @@ mod tests {
         let job_status_validator = schema_validator("contracts/v1/job_status_event.schema.json");
         let job_cancel_validator = schema_validator("contracts/v1/job_cancel_request.schema.json");
         let approval_validator = schema_validator("contracts/v1/approval_event.schema.json");
+        let action_result_validator = schema_validator("contracts/v1/action_result.schema.json");
 
         let event = Event {
             v: CONTRACT_VERSION,
@@ -282,6 +311,18 @@ mod tests {
             reason_code: None,
         };
 
+        let action_result = ActionResult {
+            v: CONTRACT_VERSION,
+            plan_id: "plan_1".to_string(),
+            action_id: "act_1".to_string(),
+            tenant_id: "tenant-a".to_string(),
+            status: "succeeded".to_string(),
+            ts: "2026-01-01T00:03:00Z".to_string(),
+            provider_message_id: Some("provider-msg-1".to_string()),
+            reason_code: None,
+            error: None,
+        };
+
         assert!(event_validator
             .validate(&serde_json::to_value(event).unwrap())
             .is_ok());
@@ -299,6 +340,9 @@ mod tests {
             .is_ok());
         assert!(approval_validator
             .validate(&serde_json::to_value(approval).unwrap())
+            .is_ok());
+        assert!(action_result_validator
+            .validate(&serde_json::to_value(action_result).unwrap())
             .is_ok());
     }
 
