@@ -67,6 +67,9 @@ jobs:
       - name: Clippy
         run: mise run lint
 
+      - name: Contracts verify
+        run: mise run contracts-verify
+
       - name: Test
         run: mise run test
 

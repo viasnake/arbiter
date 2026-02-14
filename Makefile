@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build ci
+.PHONY: fmt lint test build contracts-verify ci
 
 fmt:
 	mise run fmt
@@ -11,6 +11,9 @@ test:
 
 build:
 	mise run build
+
+contracts-verify:
+	mise run contracts-verify
 
 ci:
 	mise run ci

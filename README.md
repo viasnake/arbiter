@@ -68,6 +68,7 @@ Arbiter is the decision plane. Execution belongs to the execution plane.
 - `POST /v1/job-cancel`
 - `POST /v1/approval-events`
 - `POST /v1/action-results`
+- `GET /v1/action-results/{tenant_id}/{plan_id}/{action_id}`
 - `GET /v1/contracts`
 - `GET /v1/healthz`
 
@@ -78,13 +79,14 @@ OpenAPI: `openapi/v1.yaml`
 - required: `v`, `plan_id`, `action_id`, `tenant_id`, `status`, `ts`
 - optional: `provider_message_id`, `reason_code`, `error`
 - status enum: `succeeded` | `failed` | `skipped`
-- idempotency key: `tenant_id + action_id + provider_message_id` (fallback: canonical payload hash)
-- conflicting duplicate or invalid transition: returns `409`
+- idempotency key: `tenant_id + plan_id + action_id`
+- conflicting duplicate payload mismatch: returns `409` (`conflict.payload_mismatch`)
 
 Read APIs:
 
 - `GET /v1/jobs/{tenant_id}/{job_id}`
 - `GET /v1/approvals/{tenant_id}/{approval_id}`
+- `GET /v1/action-results/{tenant_id}/{plan_id}/{action_id}`
 
 ## Contracts and versioning
 
@@ -159,7 +161,7 @@ mise run build
 
 ## Release automation
 
-- Push a SemVer tag (for example, `v1.0.0`) to trigger the release workflow.
+- Push a SemVer tag (for example, `v1.1.0`) to trigger the release workflow.
 - CI validates tag/Cargo/OpenAPI version consistency before publishing.
 - GitHub Release notes are generated automatically and include attached binary/checksum artifacts.
 
@@ -168,6 +170,11 @@ mise run build
 - SLO draft: `docs/slo.md`
 - Runbook: `docs/runbook.md`
 - AuthZ resilience policy: `docs/authz-resilience.md`
+- State semantics: `docs/state/jobs.md`, `docs/state/approvals.md`, `docs/state/action-results.md`
+- Audit mirror semantics: `docs/audit-mirror.md`
+- Contracts metadata generation: `docs/contracts-metadata.md`
+- Contracts endpoint semantics: `docs/contracts-endpoint.md`
+- Release scope (v1.1.0): `docs/releases/v1.1.0.md`
 
 ## Design documents
 

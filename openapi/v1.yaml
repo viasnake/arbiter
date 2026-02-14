@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Arbiter API
-  version: 1.0.0
+  version: 1.1.0
 servers:
   - url: http://localhost:8080
 paths:
@@ -192,6 +192,34 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: Conflict (duplicate key payload mismatch or invalid state transition)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/action-results/{tenant_id}/{plan_id}/{action_id}:
+    get:
+      summary: Get latest action execution result
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: plan_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: action_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ActionResult
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResult" }
+        "404":
+          description: Not found
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

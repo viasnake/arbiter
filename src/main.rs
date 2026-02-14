@@ -6,14 +6,20 @@ async fn main() {
     let cmd = args.next().unwrap_or_default();
     if cmd == "audit-verify" {
         let mut audit_path = String::from("./arbiter-audit.jsonl");
+        let mut mirror_path: Option<String> = None;
         while let Some(arg) = args.next() {
             if arg == "--path" {
                 if let Some(v) = args.next() {
                     audit_path = v;
                 }
             }
+            if arg == "--mirror-path" {
+                if let Some(v) = args.next() {
+                    mirror_path = Some(v);
+                }
+            }
         }
-        match arbiter_server::verify_audit_chain(&audit_path) {
+        match arbiter_server::verify_audit_chain_with_mirror(&audit_path, mirror_path.as_deref()) {
             Ok(message) => {
                 println!("{message}");
                 return;
@@ -26,7 +32,9 @@ async fn main() {
     }
 
     if cmd != "serve" {
-        eprintln!("Usage: arbiter serve --config <path> | arbiter audit-verify --path <path>");
+        eprintln!(
+            "Usage: arbiter serve --config <path> | arbiter audit-verify --path <path> [--mirror-path <path>]"
+        );
         std::process::exit(2);
     }
 

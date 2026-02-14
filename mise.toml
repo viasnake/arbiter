@@ -17,10 +17,14 @@ run = "cargo clippy --workspace --all-targets -- -D warnings"
 description = "Run workspace tests"
 run = "cargo test --workspace"
 
+[tasks.contracts-verify]
+description = "Verify OpenAPI and contract schema linkage"
+run = "cargo test -p arbiter-contracts"
+
 [tasks.build]
 description = "Build release binary"
 run = "cargo build --release"
 
 [tasks.ci]
 description = "Run full local CI pipeline"
-depends = ["fmt-check", "lint", "test", "build"]
+depends = ["fmt-check", "lint", "contracts-verify", "test", "build"]

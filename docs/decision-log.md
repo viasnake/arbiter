@@ -36,3 +36,24 @@ This log captures decisions with rationale, trade-offs, and re-evaluation trigge
 - Why: simple stream output with tamper-evident linkage.
 - Trade-off: integrity is local unless mirrored to another sink.
 - Revisit when: stronger external integrity guarantees are needed.
+
+## D-006: `/v1/contracts` is generated from contracts + OpenAPI
+
+- Decision: contracts metadata is generated from `contracts/v1/*.schema.json` and `openapi/v1.yaml` at build time.
+- Why: prevent source drift and ensure hash stability for the same repository state.
+- Trade-off: `generated_at` is build-time metadata and can differ across separate builds.
+- Revisit when: multi-version contract manifests (v1 + v2) are introduced.
+
+## D-007: action-results are idempotent by `(tenant_id, plan_id, action_id)` and reject mismatches
+
+- Decision: action-result ingest is idempotent by defined key, and same key with payload mismatch returns `409`.
+- Why: executor retries must be safe and conflict semantics must remain explicit.
+- Trade-off: clients must keep retry payloads byte-equivalent for the same idempotency key.
+- Revisit when: partial updates or multi-stage action-result lifecycle is required.
+
+## D-008: state read endpoints reflect persisted event streams
+
+- Decision: `GET /v1/jobs/...` and `GET /v1/approvals/...` reflect latest persisted state from explicit events.
+- Why: incident diagnostics require retrievable, deterministic state snapshots.
+- Trade-off: no implicit/background transitions; expiration requires explicit event input.
+- Revisit when: deterministic clock-driven state derivation is formally defined.

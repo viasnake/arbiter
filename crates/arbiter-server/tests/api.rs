@@ -1,5 +1,5 @@
 use arbiter_config::{Audit, Authz, AuthzCache, Config, Gate, Planner, Server, Store};
-use arbiter_server::{build_app, verify_audit_chain};
+use arbiter_server::{build_app, verify_audit_chain, verify_audit_chain_with_mirror};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::post;
@@ -156,6 +156,35 @@ async fn spawn_mock_authz_always_500(counter: Arc<AtomicUsize>) -> String {
     format!("http://{addr}/v1/authorize")
 }
 
+async fn spawn_mock_authz_always_allow(counter: Arc<AtomicUsize>) -> String {
+    let app = Router::new().route(
+        "/v1/authorize",
+        post(move || {
+            let c = Arc::clone(&counter);
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "v": 1,
+                        "decision": "allow",
+                        "reason_code": "ok",
+                        "policy_version": "policy:v1",
+                        "obligations": {},
+                        "ttl_ms": 30000
+                    })),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/v1/authorize")
+}
+
 fn sample_event(event_id: &str) -> Value {
     json!({
         "v": 1,
@@ -220,7 +249,9 @@ async fn contracts_endpoint_exposes_source_hashes() {
 
     assert_eq!(payload["openapi_sha256"], expected);
     assert!(payload["contracts_set_sha256"].as_str().is_some());
-    assert!(payload["schemas"]["event"].as_str().is_some());
+    assert!(payload["schemas"]["../contracts/v1/event.schema.json"]
+        .as_str()
+        .is_some());
 }
 
 #[tokio::test]
@@ -919,6 +950,86 @@ async fn external_authz_circuit_breaker_short_circuits_repeated_failures() {
 }
 
 #[tokio::test]
+async fn external_authz_cache_hit_reduces_outbound_calls() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let endpoint = spawn_mock_authz_always_allow(Arc::clone(&calls)).await;
+    let mut cfg = test_config();
+    cfg.authz.mode = "external_http".to_string();
+    cfg.authz.endpoint = Some(endpoint);
+    cfg.authz.cache.enabled = true;
+    cfg.authz.cache.ttl_ms = 60_000;
+    cfg.authz.retry_max_attempts = 1;
+
+    let app = build_app(cfg).await.unwrap();
+    for event_id in ["evt-authz-cache-1", "evt-authz-cache-2"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/events")
+            .header("content-type", "application/json")
+            .body(Body::from(sample_event(event_id).to_string()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn external_authz_fail_mode_allow_allows_on_transport_failure() {
+    let endpoint = "http://127.0.0.1:1/v1/authorize".to_string();
+    let mut cfg = test_config();
+    cfg.authz.mode = "external_http".to_string();
+    cfg.authz.endpoint = Some(endpoint);
+    cfg.authz.fail_mode = "allow".to_string();
+    cfg.authz.cache.enabled = false;
+    cfg.authz.retry_max_attempts = 1;
+
+    let app = build_app(cfg).await.unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(sample_event("evt-authz-allow-mode").to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: Value = serde_json::from_slice(&body).unwrap();
+    assert_ne!(plan["actions"][0]["type"], "do_nothing");
+}
+
+#[tokio::test]
+async fn external_authz_fail_mode_fallback_builtin_allows_on_transport_failure() {
+    let endpoint = "http://127.0.0.1:1/v1/authorize".to_string();
+    let mut cfg = test_config();
+    cfg.authz.mode = "external_http".to_string();
+    cfg.authz.endpoint = Some(endpoint);
+    cfg.authz.fail_mode = "fallback_builtin".to_string();
+    cfg.authz.cache.enabled = false;
+    cfg.authz.retry_max_attempts = 1;
+
+    let app = build_app(cfg).await.unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            sample_event("evt-authz-fallback-mode").to_string(),
+        ))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: Value = serde_json::from_slice(&body).unwrap();
+    assert_ne!(plan["actions"][0]["type"], "do_nothing");
+}
+
+#[tokio::test]
 async fn can_choose_start_agent_job_action_via_extension() {
     let app = build_app(test_config()).await.unwrap();
     let mut event = sample_event("evt-job-mode");
@@ -1051,6 +1162,248 @@ async fn job_status_event_is_idempotent() {
     let p2: Value = serde_json::from_slice(&body2).unwrap();
 
     assert_eq!(p1, p2);
+}
+
+#[tokio::test]
+async fn job_status_duplicate_payload_mismatch_returns_conflict() {
+    let app = build_app(test_config()).await.unwrap();
+    let first = json!({
+        "v": 1,
+        "event_id": "job-status-evt-mismatch",
+        "tenant_id": "tenant-a",
+        "job_id": "job-1",
+        "status": "started",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+    let second = json!({
+        "v": 1,
+        "event_id": "job-status-evt-mismatch",
+        "tenant_id": "tenant-a",
+        "job_id": "job-1",
+        "status": "heartbeat",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+
+    let res1 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/job-events")
+                .header("content-type", "application/json")
+                .body(Body::from(first.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+
+    let res2 = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/job-events")
+                .header("content-type", "application/json")
+                .body(Body::from(second.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error"]["code"], "conflict.payload_mismatch");
+}
+
+#[tokio::test]
+async fn job_status_invalid_transition_returns_conflict() {
+    let app = build_app(test_config()).await.unwrap();
+    let completed = json!({
+        "v": 1,
+        "event_id": "job-transition-1",
+        "tenant_id": "tenant-a",
+        "job_id": "job-2",
+        "status": "completed",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+    let started = json!({
+        "v": 1,
+        "event_id": "job-transition-2",
+        "tenant_id": "tenant-a",
+        "job_id": "job-2",
+        "status": "started",
+        "ts": "2026-02-14T00:01:00Z"
+    });
+
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/job-events")
+                .header("content-type", "application/json")
+                .body(Body::from(completed.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/job-events")
+                .header("content-type", "application/json")
+                .body(Body::from(started.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn approval_invalid_transition_returns_conflict() {
+    let app = build_app(test_config()).await.unwrap();
+    let approved = json!({
+        "v": 1,
+        "event_id": "approval-transition-1",
+        "tenant_id": "tenant-a",
+        "approval_id": "approval-9",
+        "status": "approved",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+    let requested = json!({
+        "v": 1,
+        "event_id": "approval-transition-2",
+        "tenant_id": "tenant-a",
+        "approval_id": "approval-9",
+        "status": "requested",
+        "ts": "2026-02-14T00:01:00Z"
+    });
+
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/approval-events")
+                .header("content-type", "application/json")
+                .body(Body::from(approved.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/approval-events")
+                .header("content-type", "application/json")
+                .body(Body::from(requested.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn approval_duplicate_payload_mismatch_returns_conflict() {
+    let app = build_app(test_config()).await.unwrap();
+    let first = json!({
+        "v": 1,
+        "event_id": "approval-evt-mismatch",
+        "tenant_id": "tenant-a",
+        "approval_id": "approval-10",
+        "status": "requested",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+    let second = json!({
+        "v": 1,
+        "event_id": "approval-evt-mismatch",
+        "tenant_id": "tenant-a",
+        "approval_id": "approval-10",
+        "status": "approved",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/approval-events")
+                .header("content-type", "application/json")
+                .body(Body::from(first.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/approval-events")
+                .header("content-type", "application/json")
+                .body(Body::from(second.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn action_results_get_endpoint_returns_stored_payload() {
+    let app = build_app(test_config()).await.unwrap();
+    let payload = json!({
+        "v": 1,
+        "plan_id": "plan-get-1",
+        "action_id": "act-get-1",
+        "tenant_id": "tenant-a",
+        "status": "succeeded",
+        "ts": "2026-02-14T00:00:00Z",
+        "provider_message_id": "provider-1"
+    });
+    let ingest = Request::builder()
+        .method("POST")
+        .uri("/v1/action-results")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let ingest_res = app.clone().oneshot(ingest).await.unwrap();
+    assert_eq!(ingest_res.status(), StatusCode::NO_CONTENT);
+
+    let get_req = Request::builder()
+        .method("GET")
+        .uri("/v1/action-results/tenant-a/plan-get-1/act-get-1")
+        .body(Body::empty())
+        .unwrap();
+    let get_res = app.oneshot(get_req).await.unwrap();
+    assert_eq!(get_res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(get_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let got: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(got["plan_id"], "plan-get-1");
+    assert_eq!(got["action_id"], "act-get-1");
+    assert_eq!(got["status"], "succeeded");
+}
+
+#[tokio::test]
+async fn action_results_get_endpoint_returns_404_when_missing() {
+    let app = build_app(test_config()).await.unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/action-results/tenant-a/plan-missing/action-missing")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1219,6 +1572,33 @@ async fn immutable_mirror_sink_receives_audit_lines() {
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     let content = std::fs::read_to_string(mirror).unwrap();
     assert!(!content.trim().is_empty());
+}
+
+#[tokio::test]
+async fn audit_verify_supports_mirror_comparison() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let mirror = std::env::temp_dir().join(format!("arbiter-audit-mirror-verify-{nanos}.jsonl"));
+    let mut cfg = test_config();
+    cfg.audit.immutable_mirror_path = Some(mirror.to_string_lossy().to_string());
+    let audit_path = cfg.audit.jsonl_path.clone();
+
+    let app = build_app(cfg).await.unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(sample_event("evt-verify-mirror").to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let mirror_path = mirror.to_string_lossy().to_string();
+    let result = verify_audit_chain_with_mirror(&audit_path, Some(&mirror_path));
+    assert!(result.is_ok());
 }
 
 #[tokio::test]

@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 
 use arbiter_config::Config;
 use arbiter_contracts::{
-    Action, ActionResult, ActionType, ApprovalEvent, AuthZDecision, AuthZReqData, AuthZRequest,
-    AuthZResource, Event, GenerationResult, JobCancelRequest, JobStatusEvent, ResponsePlan,
-    CONTRACT_VERSION,
+    contracts_manifest_v1, Action, ActionResult, ActionType, ApprovalEvent, AuthZDecision,
+    AuthZReqData, AuthZRequest, AuthZResource, Event, GenerationResult, JobCancelRequest,
+    JobStatusEvent, ResponsePlan, CONTRACT_VERSION,
 };
 use arbiter_kernel::{
     decide_intent, do_nothing_plan, evaluate_gate, minute_bucket, parse_event_ts,
@@ -54,6 +54,10 @@ pub async fn build_app(cfg: Config) -> Result<Router, String> {
         .route("/v1/job-cancel", post(job_cancel))
         .route("/v1/approval-events", post(approval_events))
         .route("/v1/action-results", post(action_results))
+        .route(
+            "/v1/action-results/{tenant_id}/{plan_id}/{action_id}",
+            get(action_result_state),
+        )
         .route("/v1/contracts", get(contracts))
         .route("/v1/jobs/{tenant_id}/{job_id}", get(job_state))
         .route(
@@ -116,7 +120,8 @@ impl AppState {
                     "idempotency_hit",
                     Some(existing.plan_id.clone()),
                 ))
-                .await;
+                .await
+                .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
             return Ok(existing);
         }
 
@@ -167,7 +172,8 @@ impl AppState {
                         planner: None,
                     }),
                 )
-                .await;
+                .await
+                .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
             return Ok(plan);
         }
         drop(store);
@@ -213,7 +219,8 @@ impl AppState {
                         planner: None,
                     }),
                 )
-                .await;
+                .await
+                .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
             return Ok(plan);
         }
 
@@ -322,7 +329,8 @@ impl AppState {
                     }),
                 }),
             )
-            .await;
+            .await
+            .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
         Ok(plan)
     }
 
@@ -355,7 +363,8 @@ impl AppState {
                         "generation_unknown_action",
                         Some(plan.plan_id.clone()),
                     ))
-                    .await;
+                    .await
+                    .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
                 return Ok(plan);
             }
         };
@@ -395,7 +404,8 @@ impl AppState {
                 action_name(&plan.actions[0]),
                 Some(plan.plan_id.clone()),
             ))
-            .await;
+            .await
+            .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
         Ok(plan)
     }
 
@@ -414,11 +424,42 @@ impl AppState {
             return Err("invalid job status".to_string());
         }
 
+        let event_key = event_key(&input.tenant_id, &input.event_id);
+        let payload_json = canonical_json_string(
+            &serde_json::to_value(&input).map_err(|e| format!("validation_error: {e}"))?,
+        );
+
         if let Some(existing) = {
             let store = self.store.lock().await;
-            store.get_idempotency(&event_key(&input.tenant_id, &input.event_id))
+            store.get_idempotency(&event_key)
         } {
+            let maybe_existing_payload = {
+                let store = self.store.lock().await;
+                store.get_event_payload(&event_key)
+            }
+            .map_err(|e| format!("validation_error: {e}"))?;
+            if let Some(existing_payload) = maybe_existing_payload {
+                if existing_payload != payload_json {
+                    return Err(
+                        "conflict.payload_mismatch: duplicate event_id has different payload"
+                            .to_string(),
+                    );
+                }
+            }
             return Ok(existing);
+        }
+
+        let current = {
+            let store = self.store.lock().await;
+            store.get_job_state(&input.tenant_id, &input.job_id)
+        }
+        .map_err(|e| format!("validation_error: {e}"))?;
+        if !is_valid_job_transition(current.as_ref().map(|v| v.status.as_str()), &input.status) {
+            return Err(format!(
+                "conflict.invalid_transition: job status transition rejected ({:?} -> {})",
+                current.as_ref().map(|v| v.status.as_str()),
+                input.status
+            ));
         }
 
         {
@@ -430,7 +471,7 @@ impl AppState {
                     &input.status,
                     input.reason_code.as_deref(),
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("validation_error: {e}"))?;
         }
 
         let plan = do_nothing_plan(
@@ -442,8 +483,11 @@ impl AppState {
         {
             let mut store = self.store.lock().await;
             store
-                .save_idempotency(event_key(&input.tenant_id, &input.event_id), &plan)
-                .map_err(|e| e.to_string())?;
+                .save_idempotency(event_key.clone(), &plan)
+                .map_err(|e| format!("validation_error: {e}"))?;
+            store
+                .save_event_payload(&event_key, &payload_json)
+                .map_err(|e| format!("validation_error: {e}"))?;
         }
 
         self.audit
@@ -462,7 +506,8 @@ impl AppState {
                     planner: None,
                 }),
             )
-            .await;
+            .await
+            .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
         Ok(plan)
     }
 
@@ -511,7 +556,8 @@ impl AppState {
                 "job_cancelled",
                 Some(plan.plan_id.clone()),
             ))
-            .await;
+            .await
+            .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
         Ok(plan)
     }
 
@@ -530,11 +576,43 @@ impl AppState {
             return Err("invalid approval status".to_string());
         }
 
+        let event_key = event_key(&input.tenant_id, &input.event_id);
+        let payload_json = canonical_json_string(
+            &serde_json::to_value(&input).map_err(|e| format!("validation_error: {e}"))?,
+        );
+
         if let Some(existing) = {
             let store = self.store.lock().await;
-            store.get_idempotency(&event_key(&input.tenant_id, &input.event_id))
+            store.get_idempotency(&event_key)
         } {
+            let maybe_existing_payload = {
+                let store = self.store.lock().await;
+                store.get_event_payload(&event_key)
+            }
+            .map_err(|e| format!("validation_error: {e}"))?;
+            if let Some(existing_payload) = maybe_existing_payload {
+                if existing_payload != payload_json {
+                    return Err(
+                        "conflict.payload_mismatch: duplicate event_id has different payload"
+                            .to_string(),
+                    );
+                }
+            }
             return Ok(existing);
+        }
+
+        let current = {
+            let store = self.store.lock().await;
+            store.get_approval_state(&input.tenant_id, &input.approval_id)
+        }
+        .map_err(|e| format!("validation_error: {e}"))?;
+        if !is_valid_approval_transition(current.as_ref().map(|v| v.status.as_str()), &input.status)
+        {
+            return Err(format!(
+                "conflict.invalid_transition: approval status transition rejected ({:?} -> {})",
+                current.as_ref().map(|v| v.status.as_str()),
+                input.status
+            ));
         }
 
         {
@@ -546,7 +624,7 @@ impl AppState {
                     &input.status,
                     input.reason_code.as_deref(),
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("validation_error: {e}"))?;
         }
 
         let reason = format!("approval_{}", input.status);
@@ -561,8 +639,11 @@ impl AppState {
         {
             let mut store = self.store.lock().await;
             store
-                .save_idempotency(event_key(&input.tenant_id, &input.event_id), &plan)
-                .map_err(|e| e.to_string())?;
+                .save_idempotency(event_key.clone(), &plan)
+                .map_err(|e| format!("validation_error: {e}"))?;
+            store
+                .save_event_payload(&event_key, &payload_json)
+                .map_err(|e| format!("validation_error: {e}"))?;
         }
 
         self.audit
@@ -574,7 +655,8 @@ impl AppState {
                 &reason,
                 Some(plan.plan_id.clone()),
             ))
-            .await;
+            .await
+            .map_err(|e| format!("internal.audit_write_failed: {e}"))?;
         Ok(plan)
     }
 }
@@ -701,12 +783,7 @@ async fn job_events(
         .process_job_status(input)
         .await
         .map(Json)
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": {"code":"validation_error","message": e}})),
-            )
-        })
+        .map_err(api_error)
 }
 
 async fn job_cancel(
@@ -733,12 +810,7 @@ async fn approval_events(
         .process_approval_event(input)
         .await
         .map(Json)
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": {"code":"validation_error","message": e}})),
-            )
-        })
+        .map_err(api_error)
 }
 
 async fn action_results(
@@ -782,7 +854,8 @@ async fn action_results(
         )
     })?;
     let payload_json = canonical_json_string(&payload);
-    let idempotency_key = action_result_idempotency_key(&input, &payload_json);
+    let idempotency_key =
+        action_result_store_key(&input.tenant_id, &input.plan_id, &input.action_id);
     let context = {
         let store = state.store.lock().await;
         store
@@ -839,7 +912,7 @@ async fn action_results(
         ActionResultIngest::Inserted(v) => (v, "recorded"),
         ActionResultIngest::Duplicate(v) => (v, "idempotency_hit"),
         ActionResultIngest::Conflict(code) => {
-            state
+            if let Err(err) = state
                 .audit
                 .append(AuditRecord::new(
                     &input.tenant_id,
@@ -847,12 +920,15 @@ async fn action_results(
                     "action_result",
                     "rejected",
                     &code,
-                    Some(input.plan_id),
+                    Some(input.plan_id.clone()),
                 ))
-                .await;
+                .await
+            {
+                return Err(internal_error_response(err));
+            }
             return Err((
                 StatusCode::CONFLICT,
-                Json(json!({"error": {"code":"conflict","message":code}})),
+                Json(json!({"error": {"code":code,"message":"action result conflict"}})),
             ));
         }
     };
@@ -898,13 +974,53 @@ async fn action_results(
             reason,
             Some(stored.plan_id),
         ))
-        .await;
+        .await
+        .map_err(internal_error_response)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn action_result_state(
+    State(state): State<AppState>,
+    Path((tenant_id, plan_id, action_id)): Path<(String, String, String)>,
+) -> Result<Json<ActionResult>, (StatusCode, Json<Value>)> {
+    if tenant_id.is_empty() || plan_id.is_empty() || action_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({"error": {"code":"validation_error","message":"tenant_id, plan_id, and action_id are required"}}),
+            ),
+        ));
+    }
+
+    let record = {
+        let store = state.store.lock().await;
+        store.get_action_result(&tenant_id, &plan_id, &action_id)
+    }
+    .map_err(validation_error_response)?;
+
+    match record {
+        Some(v) => Ok(Json(ActionResult {
+            v: CONTRACT_VERSION,
+            plan_id: v.plan_id,
+            action_id: v.action_id,
+            tenant_id: v.tenant_id,
+            status: v.status,
+            ts: v.ts,
+            provider_message_id: v.provider_message_id,
+            reason_code: v.reason_code,
+            error: v.error.map(action_result_error_from_value),
+        })),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": {"code":"not_found","message":"action result not found"}})),
+        )),
+    }
 }
 
 #[derive(Default)]
 struct MemoryStore {
     idempotency: HashMap<String, ResponsePlan>,
+    event_payloads: HashMap<String, String>,
     rooms: HashMap<String, RoomState>,
     pending: HashMap<String, PendingGeneration>,
     tenant_rate: HashMap<String, HashMap<i64, usize>>,
@@ -912,7 +1028,6 @@ struct MemoryStore {
     approval_states: HashMap<String, StateEntry>,
     action_index: HashMap<String, ActionContext>,
     action_results_by_key: HashMap<String, ActionResultRecord>,
-    action_results_by_action: HashMap<String, ActionResultRecord>,
 }
 
 enum StoreBackend {
@@ -1027,6 +1142,25 @@ impl StoreBackend {
         match self {
             StoreBackend::Memory(store) => store.rooms.get(key).cloned().unwrap_or_default(),
             StoreBackend::Sqlite(store) => store.get_room(key).unwrap_or_default(),
+        }
+    }
+
+    fn get_event_payload(&self, event_key: &str) -> Result<Option<String>, String> {
+        match self {
+            StoreBackend::Memory(store) => Ok(store.event_payloads.get(event_key).cloned()),
+            StoreBackend::Sqlite(store) => store.get_event_payload(event_key),
+        }
+    }
+
+    fn save_event_payload(&mut self, event_key: &str, payload_json: &str) -> Result<(), String> {
+        match self {
+            StoreBackend::Memory(store) => {
+                store
+                    .event_payloads
+                    .insert(event_key.to_string(), payload_json.to_string());
+                Ok(())
+            }
+            StoreBackend::Sqlite(store) => store.save_event_payload(event_key, payload_json),
         }
     }
 
@@ -1179,7 +1313,8 @@ impl StoreBackend {
         &mut self,
         mut record: ActionResultRecord,
     ) -> Result<ActionResultIngest, String> {
-        let action_key = action_index_key(&record.tenant_id, &record.action_id);
+        let action_result_key =
+            action_result_store_key(&record.tenant_id, &record.plan_id, &record.action_id);
         match self {
             StoreBackend::Memory(store) => {
                 if let Some(existing) = store.action_results_by_key.get(&record.idempotency_key) {
@@ -1187,16 +1322,7 @@ impl StoreBackend {
                         return Ok(ActionResultIngest::Duplicate(existing.clone()));
                     }
                     return Ok(ActionResultIngest::Conflict(
-                        "action_result_idempotency_conflict".to_string(),
-                    ));
-                }
-
-                if let Some(existing) = store.action_results_by_action.get(&action_key) {
-                    if existing.payload_json == record.payload_json {
-                        return Ok(ActionResultIngest::Duplicate(existing.clone()));
-                    }
-                    return Ok(ActionResultIngest::Conflict(
-                        "action_result_transition_rejected".to_string(),
+                        "conflict.payload_mismatch".to_string(),
                     ));
                 }
 
@@ -1204,8 +1330,8 @@ impl StoreBackend {
                     .action_results_by_key
                     .insert(record.idempotency_key.clone(), record.clone());
                 store
-                    .action_results_by_action
-                    .insert(action_key, record.clone());
+                    .action_results_by_key
+                    .insert(action_result_key, record.clone());
                 Ok(ActionResultIngest::Inserted(record))
             }
             StoreBackend::Sqlite(store) => {
@@ -1221,6 +1347,19 @@ impl StoreBackend {
             }
         }
     }
+
+    fn get_action_result(
+        &self,
+        tenant_id: &str,
+        plan_id: &str,
+        action_id: &str,
+    ) -> Result<Option<ActionResultRecord>, String> {
+        let key = action_result_store_key(tenant_id, plan_id, action_id);
+        match self {
+            StoreBackend::Memory(store) => Ok(store.action_results_by_key.get(&key).cloned()),
+            StoreBackend::Sqlite(store) => store.get_action_result(tenant_id, plan_id, action_id),
+        }
+    }
 }
 
 impl SqliteStore {
@@ -1231,6 +1370,10 @@ impl SqliteStore {
             CREATE TABLE IF NOT EXISTS idempotency (
                 event_key TEXT PRIMARY KEY,
                 plan_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS event_payloads (
+                event_key TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS rooms (
                 room_key TEXT PRIMARY KEY,
@@ -1290,7 +1433,7 @@ impl SqliteStore {
                 ingested_at TEXT NOT NULL,
                 action_type TEXT,
                 room_id TEXT,
-                PRIMARY KEY (tenant_id, action_id),
+                PRIMARY KEY (tenant_id, plan_id, action_id),
                 UNIQUE (tenant_id, idempotency_key)
             );
             ",
@@ -1327,6 +1470,27 @@ impl SqliteStore {
             )
             .map_err(|e| e.to_string())?;
         self.index_plan_actions(&plan.tenant_id, plan)?;
+        Ok(())
+    }
+
+    fn get_event_payload(&self, event_key: &str) -> Result<Option<String>, String> {
+        self.conn
+            .query_row(
+                "SELECT payload_json FROM event_payloads WHERE event_key = ?1",
+                params![event_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    fn save_event_payload(&mut self, event_key: &str, payload_json: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO event_payloads(event_key, payload_json) VALUES (?1, ?2)",
+                params![event_key, payload_json],
+            )
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -1642,9 +1806,10 @@ impl SqliteStore {
             .map_err(|e| e.to_string())
     }
 
-    fn get_action_result_by_action(
+    fn get_action_result(
         &self,
         tenant_id: &str,
+        plan_id: &str,
         action_id: &str,
     ) -> Result<Option<ActionResultRecord>, String> {
         self.conn
@@ -1653,9 +1818,9 @@ impl SqliteStore {
                 SELECT tenant_id, plan_id, action_id, status, ts, provider_message_id, reason_code,
                        error_json, idempotency_key, payload_json, ingested_at, action_type, room_id
                 FROM action_results
-                WHERE tenant_id = ?1 AND action_id = ?2
+                WHERE tenant_id = ?1 AND plan_id = ?2 AND action_id = ?3
                 ",
-                params![tenant_id, action_id],
+                params![tenant_id, plan_id, action_id],
                 |row| {
                     let error_json: Option<String> = row.get(7)?;
                     Ok(ActionResultRecord {
@@ -1714,6 +1879,8 @@ impl SqliteStore {
         &mut self,
         record: ActionResultRecord,
     ) -> Result<ActionResultIngest, String> {
+        let action_result_key =
+            action_result_store_key(&record.tenant_id, &record.plan_id, &record.action_id);
         if let Some(existing) =
             self.get_action_result_by_idempotency(&record.tenant_id, &record.idempotency_key)?
         {
@@ -1721,18 +1888,24 @@ impl SqliteStore {
                 return Ok(ActionResultIngest::Duplicate(existing));
             }
             return Ok(ActionResultIngest::Conflict(
-                "action_result_idempotency_conflict".to_string(),
+                "conflict.payload_mismatch".to_string(),
             ));
         }
 
         if let Some(existing) =
-            self.get_action_result_by_action(&record.tenant_id, &record.action_id)?
+            self.get_action_result(&record.tenant_id, &record.plan_id, &record.action_id)?
         {
             if existing.payload_json == record.payload_json {
                 return Ok(ActionResultIngest::Duplicate(existing));
             }
             return Ok(ActionResultIngest::Conflict(
-                "action_result_transition_rejected".to_string(),
+                "conflict.payload_mismatch".to_string(),
+            ));
+        }
+
+        if record.idempotency_key != action_result_key {
+            return Ok(ActionResultIngest::Conflict(
+                "conflict.payload_mismatch".to_string(),
             ));
         }
 
@@ -2142,52 +2315,61 @@ impl AuditJsonl {
         })
     }
 
-    async fn append(&self, mut rec: AuditRecord) {
+    async fn append(&self, mut rec: AuditRecord) -> Result<(), String> {
         let prev_hash = { self.last_hash.lock().await.clone() };
         rec.prev_hash = prev_hash;
-        if let Ok(seed) = serde_json::to_string(&rec) {
-            rec.record_hash = hash_hex(seed.as_bytes());
-        }
+        let seed = serde_json::to_string(&rec).map_err(|e| e.to_string())?;
+        rec.record_hash = hash_hex(seed.as_bytes());
 
         let mut file = self.file.lock().await;
-        if let Ok(line) = serde_json::to_string(&rec) {
-            use tokio::io::AsyncWriteExt;
-            let _ = file.write_all(line.as_bytes()).await;
-            let _ = file.write_all(b"\n").await;
+        let line = serde_json::to_string(&rec).map_err(|e| e.to_string())?;
+        use tokio::io::AsyncWriteExt;
+        file.write_all(line.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+        file.write_all(b"\n").await.map_err(|e| e.to_string())?;
 
-            if let Some(mirror) = &self.immutable_mirror {
-                let mut mirror_file = mirror.lock().await;
-                let _ = mirror_file.write_all(line.as_bytes()).await;
-                let _ = mirror_file.write_all(b"\n").await;
-            }
-
-            {
-                let mut last_hash = self.last_hash.lock().await;
-                *last_hash = Some(rec.record_hash.clone());
-            }
-
-            if let Some(sqlite) = &self.sqlite {
-                let conn = sqlite.lock().await;
-                let _ = conn.execute(
-                    "
-                    INSERT OR REPLACE INTO audit_records
-                    (audit_id, tenant_id, correlation_id, action, result, reason_code, ts, plan_id, record_json)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                    ",
-                    params![
-                        rec.audit_id,
-                        rec.tenant_id,
-                        rec.correlation_id,
-                        rec.action,
-                        rec.result,
-                        rec.reason_code,
-                        rec.ts,
-                        rec.plan_id,
-                        line
-                    ],
-                );
-            }
+        {
+            let mut last_hash = self.last_hash.lock().await;
+            *last_hash = Some(rec.record_hash.clone());
         }
+
+        if let Some(mirror) = &self.immutable_mirror {
+            let mut mirror_file = mirror.lock().await;
+            mirror_file
+                .write_all(line.as_bytes())
+                .await
+                .map_err(|e| format!("mirror write failed: {e}"))?;
+            mirror_file
+                .write_all(b"\n")
+                .await
+                .map_err(|e| format!("mirror write failed: {e}"))?;
+        }
+
+        if let Some(sqlite) = &self.sqlite {
+            let conn = sqlite.lock().await;
+            conn.execute(
+                "
+                INSERT OR REPLACE INTO audit_records
+                (audit_id, tenant_id, correlation_id, action, result, reason_code, ts, plan_id, record_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                ",
+                params![
+                    rec.audit_id,
+                    rec.tenant_id,
+                    rec.correlation_id,
+                    rec.action,
+                    rec.result,
+                    rec.reason_code,
+                    rec.ts,
+                    rec.plan_id,
+                    line
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        Ok(())
     }
 }
 
@@ -2199,34 +2381,30 @@ fn hash_hex(input: &[u8]) -> String {
 }
 
 fn generate_contracts_metadata() -> Result<Value, String> {
-    let openapi_sha256 = hash_hex(OPENAPI_V1.as_bytes());
+    let manifest = contracts_manifest_v1();
     let mut schemas = Map::new();
-    let mut contracts_hasher = Sha256::new();
-
-    let mut contract_entries = embedded_contract_schemas();
-    contract_entries.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, body) in &contract_entries {
-        let schema_hash = hash_hex(body.as_bytes());
-        schemas.insert((*name).to_string(), Value::String(schema_hash));
-        contracts_hasher.update(name.as_bytes());
-        contracts_hasher.update(b":");
-        contracts_hasher.update(body.as_bytes());
+    for schema in &manifest.schemas {
+        schemas.insert(
+            schema.path.to_string(),
+            Value::String(schema.sha256.to_string()),
+        );
     }
-    let contracts_set_sha256: String = contracts_hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
 
-    let actions = schema_enum_values("action", "properties.type.enum")?;
-    let job_events = schema_enum_values("job_status_event", "properties.status.enum")?;
-    let approval_events = schema_enum_values("approval_event", "properties.status.enum")?;
+    let actions = schema_enum_values("../contracts/v1/action.schema.json", "properties.type.enum")?;
+    let job_events = schema_enum_values(
+        "../contracts/v1/job_status_event.schema.json",
+        "properties.status.enum",
+    )?;
+    let approval_events = schema_enum_values(
+        "../contracts/v1/approval_event.schema.json",
+        "properties.status.enum",
+    )?;
 
     Ok(json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "openapi_sha256": openapi_sha256,
-        "contracts_set_sha256": contracts_set_sha256,
-        "generated_at": format!("pkg:{}", env!("CARGO_PKG_VERSION")),
+        "openapi_sha256": manifest.openapi_sha256,
+        "contracts_set_sha256": manifest.contracts_set_sha256,
+        "generated_at": manifest.generated_at,
         "actions": {
             "enabled": actions,
             "reserved": []
@@ -2239,79 +2417,73 @@ fn generate_contracts_metadata() -> Result<Value, String> {
     }))
 }
 
-fn schema_enum_values(schema_name: &str, path: &str) -> Result<Vec<String>, String> {
-    let body = embedded_contract_schemas()
-        .into_iter()
-        .find(|(name, _)| *name == schema_name)
-        .map(|(_, text)| text)
-        .ok_or_else(|| format!("missing schema: {schema_name}"))?;
+fn schema_enum_values(schema_path: &str, path: &str) -> Result<Vec<String>, String> {
+    let manifest = contracts_manifest_v1();
+    let body = manifest
+        .schemas
+        .iter()
+        .find(|schema| schema.path == schema_path)
+        .map(|schema| schema.body)
+        .ok_or_else(|| format!("missing schema: {schema_path}"))?;
     let value: Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
     let mut current = &value;
     for part in path.split('.') {
         current = current
             .get(part)
-            .ok_or_else(|| format!("schema path not found: {schema_name}:{path}"))?;
+            .ok_or_else(|| format!("schema path not found: {schema_path}:{path}"))?;
     }
     let arr = current
         .as_array()
-        .ok_or_else(|| format!("schema enum path is not array: {schema_name}:{path}"))?;
+        .ok_or_else(|| format!("schema enum path is not array: {schema_path}:{path}"))?;
     Ok(arr
         .iter()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect())
 }
 
-fn embedded_contract_schemas() -> Vec<(&'static str, &'static str)> {
-    vec![
-        (
-            "action",
-            include_str!("../../../contracts/v1/action.schema.json"),
-        ),
-        (
-            "action_result",
-            include_str!("../../../contracts/v1/action_result.schema.json"),
-        ),
-        (
-            "approval_event",
-            include_str!("../../../contracts/v1/approval_event.schema.json"),
-        ),
-        (
-            "authz_decision",
-            include_str!("../../../contracts/v1/authz_decision.schema.json"),
-        ),
-        (
-            "authz_request",
-            include_str!("../../../contracts/v1/authz_request.schema.json"),
-        ),
-        (
-            "event",
-            include_str!("../../../contracts/v1/event.schema.json"),
-        ),
-        (
-            "generation_result",
-            include_str!("../../../contracts/v1/generation_result.schema.json"),
-        ),
-        (
-            "job_cancel_request",
-            include_str!("../../../contracts/v1/job_cancel_request.schema.json"),
-        ),
-        (
-            "job_status_event",
-            include_str!("../../../contracts/v1/job_status_event.schema.json"),
-        ),
-        (
-            "response_plan",
-            include_str!("../../../contracts/v1/response_plan.schema.json"),
-        ),
-    ]
+pub fn verify_audit_chain(path: &str) -> Result<String, String> {
+    verify_audit_chain_with_mirror(path, None)
 }
 
-const OPENAPI_V1: &str = include_str!("../../../openapi/v1.yaml");
+pub fn verify_audit_chain_with_mirror(
+    path: &str,
+    mirror_path: Option<&str>,
+) -> Result<String, String> {
+    let records = parse_and_verify_audit_chain(path)?;
+    let count = records.len();
 
-pub fn verify_audit_chain(path: &str) -> Result<String, String> {
+    if let Some(mirror) = mirror_path {
+        let mirror_records = parse_and_verify_audit_chain(mirror)?;
+        if records.len() != mirror_records.len() {
+            return Err(format!(
+                "mirror divergence: record count differs (primary={}, mirror={})",
+                records.len(),
+                mirror_records.len()
+            ));
+        }
+        for (idx, (lhs, rhs)) in records.iter().zip(mirror_records.iter()).enumerate() {
+            if lhs.record_hash != rhs.record_hash {
+                return Err(format!(
+                    "mirror divergence at line {}: primary_hash={} mirror_hash={}",
+                    idx + 1,
+                    lhs.record_hash,
+                    rhs.record_hash
+                ));
+            }
+        }
+        return Ok(format!(
+            "audit chain verified: {count} records (mirror matched: {})",
+            mirror
+        ));
+    }
+
+    Ok(format!("audit chain verified: {count} records"))
+}
+
+fn parse_and_verify_audit_chain(path: &str) -> Result<Vec<AuditRecord>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let mut prev: Option<String> = None;
-    let mut count = 0usize;
+    let mut records = Vec::new();
 
     for (idx, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
@@ -2340,11 +2512,11 @@ pub fn verify_audit_chain(path: &str) -> Result<String, String> {
                 rec.record_hash
             ));
         }
-        prev = Some(rec.record_hash);
-        count += 1;
+        prev = Some(rec.record_hash.clone());
+        records.push(rec);
     }
 
-    Ok(format!("audit chain verified: {count} records"))
+    Ok(records)
 }
 
 fn validate_event(e: &Event) -> Result<(), String> {
@@ -2425,23 +2597,8 @@ fn action_index_key(tenant_id: &str, action_id: &str) -> String {
     format!("{tenant_id}:{action_id}")
 }
 
-fn action_result_idempotency_key(input: &ActionResult, payload_json: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.tenant_id.as_bytes());
-    hasher.update(b":");
-    hasher.update(input.action_id.as_bytes());
-    hasher.update(b":");
-    if let Some(provider_message_id) = input
-        .provider_message_id
-        .as_deref()
-        .filter(|v| !v.trim().is_empty())
-    {
-        hasher.update(provider_message_id.as_bytes());
-    } else {
-        hasher.update(payload_json.as_bytes());
-    }
-    let digest = hasher.finalize();
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+fn action_result_store_key(tenant_id: &str, plan_id: &str, action_id: &str) -> String {
+    format!("{tenant_id}:{plan_id}:{action_id}")
 }
 
 fn canonical_json_string(value: &Value) -> String {
@@ -2468,6 +2625,76 @@ fn canonical_json_string(value: &Value) -> String {
             format!("{{{}}}", parts.join(","))
         }
     }
+}
+
+fn is_valid_job_transition(current: Option<&str>, next: &str) -> bool {
+    match current {
+        None => true,
+        Some("completed" | "failed" | "cancelled") => current == Some(next),
+        Some("started") => matches!(
+            next,
+            "started" | "heartbeat" | "completed" | "failed" | "cancelled"
+        ),
+        Some("heartbeat") => matches!(next, "heartbeat" | "completed" | "failed" | "cancelled"),
+        Some(_) => false,
+    }
+}
+
+fn is_valid_approval_transition(current: Option<&str>, next: &str) -> bool {
+    match current {
+        None => true,
+        Some("approved" | "rejected" | "expired") => current == Some(next),
+        Some("requested") => matches!(next, "requested" | "approved" | "rejected" | "expired"),
+        Some(_) => false,
+    }
+}
+
+fn api_error(error: String) -> (StatusCode, Json<Value>) {
+    if let Some(message) = error.strip_prefix("conflict.payload_mismatch:") {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": {"code":"conflict.payload_mismatch","message": message.trim()}})),
+        );
+    }
+    if let Some(message) = error.strip_prefix("conflict.invalid_transition:") {
+        return (
+            StatusCode::CONFLICT,
+            Json(
+                json!({"error": {"code":"conflict.invalid_transition","message": message.trim()}}),
+            ),
+        );
+    }
+    if let Some(message) = error.strip_prefix("internal.audit_write_failed:") {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(
+                json!({"error": {"code":"internal.audit_write_failed","message": message.trim()}}),
+            ),
+        );
+    }
+    validation_error_response(error)
+}
+
+fn validation_error_response(message: String) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": {"code":"validation_error","message": message}})),
+    )
+}
+
+fn internal_error_response(message: String) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"error": {"code":"internal_error","message": message}})),
+    )
+}
+
+fn action_result_error_from_value(value: Value) -> arbiter_contracts::ActionResultError {
+    serde_json::from_value(value).unwrap_or(arbiter_contracts::ActionResultError {
+        code: Some("invalid_error_payload".to_string()),
+        message: Some("stored action-result error payload is invalid".to_string()),
+        details: Map::new(),
+    })
 }
 
 #[cfg(test)]

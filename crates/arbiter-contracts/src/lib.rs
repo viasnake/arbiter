@@ -3,6 +3,35 @@ use serde_json::Value;
 
 pub const CONTRACT_VERSION: i32 = 1;
 
+#[derive(Debug, Clone)]
+pub struct ContractSchemaManifest {
+    pub path: &'static str,
+    pub sha256: &'static str,
+    pub body: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContractsManifest {
+    pub openapi_sha256: &'static str,
+    pub contracts_set_sha256: &'static str,
+    pub generated_at: &'static str,
+    pub schemas: Vec<ContractSchemaManifest>,
+}
+
+include!(concat!(env!("OUT_DIR"), "/generated_contracts.rs"));
+
+pub fn contracts_manifest_v1() -> ContractsManifest {
+    ContractsManifest {
+        openapi_sha256: GENERATED_OPENAPI_SHA256,
+        contracts_set_sha256: GENERATED_CONTRACTS_SET_SHA256,
+        generated_at: GENERATED_AT_RFC3339,
+        schemas: GENERATED_CONTRACT_SCHEMAS
+            .iter()
+            .map(|(path, sha256, body)| ContractSchemaManifest { path, sha256, body })
+            .collect(),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Actor {
@@ -211,6 +240,7 @@ mod tests {
     use super::*;
     use jsonschema::Validator;
     use serde_json::{json, Value};
+    use sha2::{Digest, Sha256};
     use std::path::PathBuf;
 
     #[test]
@@ -296,6 +326,11 @@ mod tests {
             (
                 "/v1/action-results",
                 "post.requestBody.content.application/json.schema.$ref",
+                "#/components/schemas/ActionResult",
+            ),
+            (
+                "/v1/action-results/{tenant_id}/{plan_id}/{action_id}",
+                "get.responses.200.content.application/json.schema.$ref",
                 "#/components/schemas/ActionResult",
             ),
             (
@@ -511,6 +546,54 @@ mod tests {
         assert_eq!(rust_values, schema_values);
     }
 
+    #[test]
+    fn contracts_manifest_matches_repo_sources() {
+        let manifest = contracts_manifest_v1();
+        assert!(!manifest.generated_at.is_empty());
+
+        let openapi_bytes = std::fs::read(repo_path("openapi/v1.yaml")).unwrap();
+        assert_eq!(manifest.openapi_sha256, hash_hex(&openapi_bytes));
+
+        let mut schema_paths: Vec<PathBuf> = std::fs::read_dir(repo_path("contracts/v1"))
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|v| v.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.ends_with(".schema.json"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        schema_paths.sort();
+
+        assert_eq!(manifest.schemas.len(), schema_paths.len());
+
+        let mut hasher = Sha256::new();
+        for (idx, path) in schema_paths.iter().enumerate() {
+            let bytes = std::fs::read(path).unwrap();
+            let expected_ref = format!(
+                "../{}",
+                path.strip_prefix(repo_path(""))
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            );
+            let actual = &manifest.schemas[idx];
+            assert_eq!(actual.path, expected_ref);
+            assert_eq!(actual.sha256, hash_hex(&bytes));
+            assert_eq!(actual.body.as_bytes(), bytes.as_slice());
+
+            hasher.update(actual.path.as_bytes());
+            hasher.update([0]);
+            hasher.update(&bytes);
+            hasher.update([0]);
+        }
+
+        let digest = hasher.finalize();
+        let contracts_set_sha256: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(manifest.contracts_set_sha256, contracts_set_sha256);
+    }
+
     fn schema_validator(relative: &str) -> Validator {
         let text = std::fs::read_to_string(repo_path(relative)).unwrap();
         let schema: Value = serde_json::from_str(&text).unwrap();
@@ -522,5 +605,12 @@ mod tests {
         base.push("../..");
         base.push(relative);
         base
+    }
+
+    fn hash_hex(bytes: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let digest = hasher.finalize();
+        digest.iter().map(|b| format!("{b:02x}")).collect()
     }
 }

@@ -27,11 +27,23 @@
   - Verify `ts` is RFC3339
 - Action result conflict (`POST /v1/action-results` returns `409`):
   - Verify duplicate retries send identical payload for same idempotency key
-  - Verify the same `action_id` does not change terminal status (`succeeded|failed|skipped`)
+  - Verify the same `(tenant_id, plan_id, action_id)` key does not change payload
 - State lookup during incident triage:
   - `GET /v1/jobs/{tenant_id}/{job_id}`
   - `GET /v1/approvals/{tenant_id}/{approval_id}`
+  - `GET /v1/action-results/{tenant_id}/{plan_id}/{action_id}`
   - `GET /v1/contracts` for source hashes (`openapi_sha256`, `contracts_set_sha256`)
+
+## Audit mirror operations
+
+- When `audit.immutable_mirror_path` is configured, write failures are fail-closed.
+- Verify both chains together:
+
+  ```bash
+  arbiter audit-verify --path ./arbiter-audit.jsonl --mirror-path ./arbiter-audit-mirror.jsonl
+  ```
+
+- Mirror mismatch indicates integrity divergence; investigate storage and filesystem reliability before replay.
 
 ## Recovery guidance
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://arbiter.dev/config/v1/config.schema.json",
-  "title": "Arbiter Configuration Schema v1.0.0",
+  "title": "Arbiter Configuration Schema v1.1.0",
   "type": "object",
   "additionalProperties": false,
   "required": [
