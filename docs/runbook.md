@@ -2,7 +2,7 @@
 
 ## Health checks
 
-- `GET /v0/healthz` must return `200 ok`
+- `GET /v1/healthz` must return `200 ok`
 - CI pipeline (`fmt-check`, `lint`, `test`, `build`) must pass on mainline
 
 ## Incident triage order

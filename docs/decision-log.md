@@ -2,10 +2,10 @@
 
 This log captures decisions with rationale, trade-offs, and re-evaluation triggers.
 
-## D-001: Builtin AuthZ mode is allow-all in v0.0.1
+## D-001: Builtin AuthZ mode is allow-all in v1.0.0
 
 - Decision: `authz.mode=builtin` always allows.
-- Why: v0.0.1 focuses on control-plane composition and external RBAC integration.
+- Why: v1.0.0 focuses on control-plane composition and external RBAC integration.
 - Trade-off: builtin mode is not policy-rich.
 - Revisit when: builtin RBAC semantics are formally specified.
 
@@ -34,5 +34,5 @@ This log captures decisions with rationale, trade-offs, and re-evaluation trigge
 
 - Decision: audit sink writes newline-delimited JSON records in append mode.
 - Why: simple, inspectable, and stream-friendly for initial operations.
-- Trade-off: no built-in tamper-evident chain in v0.0.1.
+- Trade-off: no built-in tamper-evident chain in v1.0.0.
 - Revisit when: cryptographic integrity guarantees are required.

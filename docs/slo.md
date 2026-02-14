@@ -6,7 +6,7 @@ Define measurable service-level objectives for Arbiter as a decision control pla
 
 ## SLO Candidates
 
-- Decision latency (`POST /v0/events`): p95 <= 100ms, p99 <= 250ms (single-instance baseline)
+- Decision latency (`POST /v1/events`): p95 <= 100ms, p99 <= 250ms (single-instance baseline)
 - Decision correctness: idempotency replay returns identical `ResponsePlan` for same `(tenant_id, event_id)`
 - Audit completeness: every accepted request emits at least one audit record
 - Audit integrity: every audit record has non-empty `record_hash`; non-first records include `prev_hash`

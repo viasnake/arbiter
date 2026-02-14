@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This roadmap describes extension seams that preserve v0.0.1 invariants.
+This roadmap describes extension seams that preserve v1.0.0 invariants.
 
 ## Invariants to preserve
 

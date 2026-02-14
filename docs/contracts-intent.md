@@ -17,7 +17,7 @@ It says what should happen next, without performing the action.
 
 ## Action taxonomy intent
 
-v0.0.1 keeps action types intentionally small:
+v1.0.0 keeps action types intentionally small:
 
 - no-op (`do_nothing`)
 - request generation
