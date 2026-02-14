@@ -25,6 +25,13 @@
   - Verify required fields (`v`, `plan_id`, `action_id`, `tenant_id`, `status`, `ts`)
   - Verify `status` is one of `succeeded`, `failed`, `skipped`
   - Verify `ts` is RFC3339
+- Action result conflict (`POST /v1/action-results` returns `409`):
+  - Verify duplicate retries send identical payload for same idempotency key
+  - Verify the same `action_id` does not change terminal status (`succeeded|failed|skipped`)
+- State lookup during incident triage:
+  - `GET /v1/jobs/{tenant_id}/{job_id}`
+  - `GET /v1/approvals/{tenant_id}/{approval_id}`
+  - `GET /v1/contracts` for source hashes (`openapi_sha256`, `contracts_set_sha256`)
 
 ## Recovery guidance
 

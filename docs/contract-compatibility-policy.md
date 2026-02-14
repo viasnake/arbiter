@@ -7,6 +7,7 @@ They can change when needed.
 
 OpenAPI transport schemas are sourced from `contracts/v1/*` via `$ref`.
 This keeps contract and OpenAPI schema definitions in one place.
+`GET /v1/contracts` is generated from embedded source files and exposes source hashes.
 
 ## How changes are handled
 

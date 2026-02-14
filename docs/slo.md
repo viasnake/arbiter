@@ -7,8 +7,10 @@ It is not a service-level promise.
 
 - Decision endpoint behavior is checked through automated tests on `POST /v1/events`.
 - Idempotency behavior is checked by replay tests for `(tenant_id, event_id)`.
+- Action-result idempotency/conflict behavior is checked on `POST /v1/action-results`.
 - Audit completeness is checked by verifying emitted audit records for accepted requests.
 - Audit integrity is checked via `record_hash` / `prev_hash` and `arbiter audit-verify`.
+- Durable state checks include restart persistence for room state and state read APIs.
 
 ## Current workflow
 

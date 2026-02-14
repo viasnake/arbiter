@@ -78,12 +78,20 @@ OpenAPI: `openapi/v1.yaml`
 - required: `v`, `plan_id`, `action_id`, `tenant_id`, `status`, `ts`
 - optional: `provider_message_id`, `reason_code`, `error`
 - status enum: `succeeded` | `failed` | `skipped`
+- idempotency key: `tenant_id + action_id + provider_message_id` (fallback: canonical payload hash)
+- conflicting duplicate or invalid transition: returns `409`
+
+Read APIs:
+
+- `GET /v1/jobs/{tenant_id}/{job_id}`
+- `GET /v1/approvals/{tenant_id}/{approval_id}`
 
 ## Contracts and versioning
 
 - Active contract set: `contracts/v1/*`
 - Contract runtime version: `v=1`
 - OpenAPI schema source: `openapi/v1.yaml` references `contracts/v1/*` directly
+- `GET /v1/contracts` is generated from embedded OpenAPI/contracts sources and exposes source hashes
 - Compatibility policy: `docs/contract-compatibility-policy.md`
 
 ## Storage
