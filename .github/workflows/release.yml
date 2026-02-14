@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup mise
+        uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag and version consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "invalid tag format: $TAG (expected vX.Y.Z)"
+            exit 1
+          fi
+
+          VERSION="${BASH_REMATCH[1]}"
+          CARGO_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          OPENAPI_VERSION="$(awk '/^info:/{in_info=1;next} in_info && /^  version:/{print $2; exit}' openapi/v1.yaml)"
+
+          if [[ -z "$CARGO_VERSION" ]]; then
+            echo "failed to read Cargo.toml version"
+            exit 1
+          fi
+          if [[ -z "$OPENAPI_VERSION" ]]; then
+            echo "failed to read openapi/v1.yaml info.version"
+            exit 1
+          fi
+          if [[ "$VERSION" != "$CARGO_VERSION" ]]; then
+            echo "tag version ($VERSION) does not match Cargo.toml ($CARGO_VERSION)"
+            exit 1
+          fi
+          if [[ "$VERSION" != "$OPENAPI_VERSION" ]]; then
+            echo "tag version ($VERSION) does not match openapi/v1.yaml info.version ($OPENAPI_VERSION)"
+            exit 1
+          fi
+
+      - name: Format check
+        run: mise run fmt-check
+
+      - name: Clippy
+        run: mise run lint
+
+      - name: Test
+        run: mise run test
+
+      - name: Build release
+        run: mise run build
+
+      - name: Package release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/arbiter dist/arbiter-linux-x86_64
+          sha256sum dist/arbiter-linux-x86_64 > dist/arbiter-linux-x86_64.sha256
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/arbiter-linux-x86_64
+            dist/arbiter-linux-x86_64.sha256
