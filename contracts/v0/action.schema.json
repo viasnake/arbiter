@@ -10,7 +10,9 @@
         "do_nothing",
         "request_generation",
         "send_message",
-        "send_reply"
+        "send_reply",
+        "start_agent_job",
+        "request_approval"
       ]
     },
     "action_id": { "type": "string", "minLength": 1 },

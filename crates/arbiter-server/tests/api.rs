@@ -465,3 +465,45 @@ async fn external_authz_invalid_contract_is_denied_in_fail_closed_mode() {
         "authz_contract_invalid_deny"
     );
 }
+
+#[tokio::test]
+async fn can_choose_start_agent_job_action_via_extension() {
+    let app = build_app(test_config()).await.unwrap();
+    let mut event = sample_event("evt-job-mode");
+    event["extensions"] = json!({"arbiter_action": "start_agent_job"});
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(plan["actions"][0]["type"], "start_agent_job");
+}
+
+#[tokio::test]
+async fn can_choose_request_approval_action_via_extension() {
+    let app = build_app(test_config()).await.unwrap();
+    let mut event = sample_event("evt-approval-mode");
+    event["extensions"] = json!({"arbiter_action": "request_approval"});
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v0/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(plan["actions"][0]["type"], "request_approval");
+}

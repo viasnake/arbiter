@@ -257,6 +257,16 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_string(),
+            serde_json::to_value(ActionType::StartAgentJob)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+            serde_json::to_value(ActionType::RequestApproval)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
         ];
 
         assert_eq!(rust_values, schema_values);

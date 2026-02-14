@@ -143,6 +143,42 @@ pub fn do_nothing_plan(
 }
 
 pub fn request_generation_plan(event: &Event, intent: Intent, authz_reason: &str) -> ResponsePlan {
+    request_intent_plan(
+        event,
+        intent,
+        authz_reason,
+        ActionType::RequestGeneration,
+        "request_generation",
+    )
+}
+
+pub fn start_agent_job_plan(event: &Event, intent: Intent, authz_reason: &str) -> ResponsePlan {
+    request_intent_plan(
+        event,
+        intent,
+        authz_reason,
+        ActionType::StartAgentJob,
+        "start_agent_job",
+    )
+}
+
+pub fn request_approval_plan(event: &Event, intent: Intent, authz_reason: &str) -> ResponsePlan {
+    request_intent_plan(
+        event,
+        intent,
+        authz_reason,
+        ActionType::RequestApproval,
+        "request_approval",
+    )
+}
+
+fn request_intent_plan(
+    event: &Event,
+    intent: Intent,
+    authz_reason: &str,
+    action_type: ActionType,
+    action_kind: &str,
+) -> ResponsePlan {
     let plan_id = plan_id(&event.tenant_id, &event.event_id);
 
     let mut target = Map::new();
@@ -175,8 +211,8 @@ pub fn request_generation_plan(event: &Event, intent: Intent, authz_reason: &str
         tenant_id: event.tenant_id.clone(),
         room_id: event.room_id.clone(),
         actions: vec![Action {
-            action_type: ActionType::RequestGeneration,
-            action_id: action_id(&plan_id, "request_generation", 0),
+            action_type,
+            action_id: action_id(&plan_id, action_kind, 0),
             target,
             payload,
         }],

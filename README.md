@@ -42,9 +42,6 @@ Implemented action types:
 - `request_generation`
 - `send_message`
 - `send_reply`
-
-Reserved (not implemented in behavior):
-
 - `start_agent_job`
 - `request_approval`
 

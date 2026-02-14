@@ -10,8 +10,8 @@ use arbiter_contracts::{
 };
 use arbiter_kernel::{
     decide_intent, do_nothing_plan, evaluate_gate, minute_bucket, parse_event_ts,
-    planner_probability, planner_seed, request_generation_plan, send_plan, GateConfig,
-    GateDecision, Intent, PlannerConfig, RoomState,
+    planner_probability, planner_seed, request_approval_plan, request_generation_plan, send_plan,
+    start_agent_job_plan, GateConfig, GateDecision, Intent, PlannerConfig, RoomState,
 };
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -214,14 +214,16 @@ impl AppState {
                 &event.event_id,
                 "planner_ignore",
             ),
-            Intent::Reply | Intent::Message => {
-                request_generation_plan(&event, intent, &authz.reason_code)
-            }
+            Intent::Reply | Intent::Message => match requested_action_mode(&event) {
+                "start_agent_job" => start_agent_job_plan(&event, intent, &authz.reason_code),
+                "request_approval" => request_approval_plan(&event, intent, &authz.reason_code),
+                _ => request_generation_plan(&event, intent, &authz.reason_code),
+            },
         };
         validate_response_plan(&plan)?;
 
         let mut store = self.store.lock().await;
-        if matches!(intent, Intent::Reply | Intent::Message) {
+        if matches!(plan.actions[0].action_type, ActionType::RequestGeneration) {
             let action = &plan.actions[0];
             let mut room_state = store.get_room(&room_key);
             room_state.generating = true;
@@ -366,8 +368,15 @@ async fn contracts() -> Json<Value> {
     Json(json!({
         "version": "0.0.1",
         "actions": {
-            "enabled": ["do_nothing", "request_generation", "send_message", "send_reply"],
-            "reserved": ["start_agent_job", "request_approval"]
+            "enabled": [
+                "do_nothing",
+                "request_generation",
+                "send_message",
+                "send_reply",
+                "start_agent_job",
+                "request_approval"
+            ],
+            "reserved": []
         }
     }))
 }
@@ -1111,6 +1120,14 @@ fn action_name(a: &Action) -> &'static str {
         ActionType::StartAgentJob => "start_agent_job",
         ActionType::RequestApproval => "request_approval",
     }
+}
+
+fn requested_action_mode(event: &Event) -> &str {
+    event
+        .extensions
+        .get("arbiter_action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("request_generation")
 }
 
 fn intent_name(intent: Intent) -> &'static str {
