@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use arbiter_config::Config;
 use arbiter_contracts::{
     Action, ActionType, ApprovalEvent, AuthZDecision, AuthZReqData, AuthZRequest, AuthZResource,
-    Event, GenerationResult, JobCancelRequest, JobStatusEvent, ResponsePlan, CONTRACT_VERSION,
+    ActionResult, Event, GenerationResult, JobCancelRequest, JobStatusEvent, ResponsePlan,
+    CONTRACT_VERSION,
 };
 use arbiter_kernel::{
     decide_intent, do_nothing_plan, evaluate_gate, minute_bucket, parse_event_ts,
@@ -667,35 +668,58 @@ async fn approval_events(
         })
 }
 
-#[derive(Debug, Deserialize)]
-struct ActionResultInput {
-    tenant_id: String,
-    correlation_id: String,
-    #[allow(dead_code)]
-    reason_code: Option<String>,
-}
-
 async fn action_results(
     State(state): State<AppState>,
-    Json(input): Json<ActionResultInput>,
+    Json(input): Json<ActionResult>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    if input.tenant_id.is_empty() || input.correlation_id.is_empty() {
+    if input.v != CONTRACT_VERSION {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code":"validation_error","message":"v must be 1"}})),
+        ));
+    }
+    if input.tenant_id.is_empty() || input.plan_id.is_empty() || input.action_id.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(
-                json!({"error": {"code":"validation_error","message":"tenant_id and correlation_id are required"}}),
+                json!({"error": {"code":"validation_error","message":"tenant_id, plan_id and action_id are required"}}),
             ),
         ));
     }
+    if parse_event_ts(&input.ts).is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code":"validation_error","message":"ts must be RFC3339"}})),
+        ));
+    }
+    if !matches!(input.status.as_str(), "succeeded" | "failed" | "skipped") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({"error": {"code":"validation_error","message":"status must be succeeded, failed, or skipped"}}),
+            ),
+        ));
+    }
+
+    let reason = input
+        .reason_code
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .unwrap_or(match input.status.as_str() {
+            "succeeded" => "action_result_succeeded",
+            "failed" => "action_result_failed",
+            _ => "action_result_skipped",
+        });
+
     state
         .audit
         .append(AuditRecord::new(
             &input.tenant_id,
-            &input.correlation_id,
+            &input.action_id,
             "action_result",
             "recorded",
-            "action_result",
-            None,
+            reason,
+            Some(input.plan_id),
         ))
         .await;
     Ok(StatusCode::NO_CONTENT)

@@ -135,9 +135,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: true
+            schema: { $ref: "#/components/schemas/ActionResult" }
       responses:
         "204":
           description: No Content
@@ -263,6 +261,25 @@ components:
         status: { enum: [requested, approved, rejected, expired] }
         ts: { type: string, format: date-time }
         reason_code: { anyOf: [{ type: string }, { type: "null" }] }
+
+    ActionResult:
+      type: object
+      additionalProperties: false
+      required: [v, plan_id, action_id, tenant_id, status, ts]
+      properties:
+        v: { type: integer, const: 1 }
+        plan_id: { type: string, minLength: 1 }
+        action_id: { type: string, minLength: 1 }
+        tenant_id: { type: string, minLength: 1 }
+        status: { enum: [succeeded, failed, skipped] }
+        ts: { type: string, format: date-time }
+        provider_message_id: { anyOf: [{ type: string }, { type: "null" }] }
+        reason_code: { anyOf: [{ type: string }, { type: "null" }] }
+        error:
+          anyOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
 
     Error:
       type: object

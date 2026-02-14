@@ -194,6 +194,53 @@ async fn healthz_ok() {
 }
 
 #[tokio::test]
+async fn action_results_accepts_v1_payload() {
+    let app = build_app(test_config()).await.unwrap();
+    let payload = json!({
+        "v": 1,
+        "plan_id": "plan_1",
+        "action_id": "act_1",
+        "tenant_id": "tenant-a",
+        "status": "succeeded",
+        "ts": "2026-02-14T00:00:00Z",
+        "provider_message_id": "msg-1",
+        "reason_code": null,
+        "error": null
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/action-results")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn action_results_rejects_invalid_status() {
+    let app = build_app(test_config()).await.unwrap();
+    let payload = json!({
+        "v": 1,
+        "plan_id": "plan_1",
+        "action_id": "act_1",
+        "tenant_id": "tenant-a",
+        "status": "unknown",
+        "ts": "2026-02-14T00:00:00Z"
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/action-results")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn idempotency_same_event_same_plan() {
     let app = build_app(test_config()).await.unwrap();
     let event = sample_event("evt-1");
