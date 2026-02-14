@@ -1,22 +1,20 @@
-# SLO Draft (v1.0.0 Target)
+# Operational Metrics (AS-IS)
 
-## Purpose
+This file describes what is currently observed or checked in operation.
+It is not a service-level promise.
 
-Define measurable service-level objectives for Arbiter as a decision control plane.
+## Current checkpoints
 
-## SLO Candidates
+- Decision endpoint behavior is checked through automated tests on `POST /v1/events`.
+- Idempotency behavior is checked by replay tests for `(tenant_id, event_id)`.
+- Audit completeness is checked by verifying emitted audit records for accepted requests.
+- Audit integrity is checked via `record_hash` / `prev_hash` and `arbiter audit-verify`.
 
-- Decision latency (`POST /v1/events`): p95 <= 100ms, p99 <= 250ms (single-instance baseline)
-- Decision correctness: idempotency replay returns identical `ResponsePlan` for same `(tenant_id, event_id)`
-- Audit completeness: every accepted request emits at least one audit record
-- Audit integrity: every audit record has non-empty `record_hash`; non-first records include `prev_hash`
+## Current workflow
 
-## Error budget policy
-
-- SLO violation windows are tracked weekly.
-- Repeated violations block non-critical feature work until baseline is restored.
+- Use CI (`fmt-check`, `lint`, `test`, `build`) as baseline quality checks.
+- Use runbook steps for incident triage and local diagnosis.
 
 ## Notes
 
-These SLOs are a draft for v1.0.0 stabilization.
-Threshold tuning should follow production telemetry.
+Operational thresholds, alert rules, and reporting cadence are project-specific and may change.

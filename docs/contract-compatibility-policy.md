@@ -1,32 +1,23 @@
-# Contract Compatibility Policy (v1.0.0)
+# Contract Change Notes
 
 ## Boundary
 
-Files under `contracts/` define the public compatibility boundary.
+Files under `contracts/` and `openapi/` describe current integration shape.
+They can change when needed.
 
-## Allowed non-breaking changes
+## How changes are handled
 
-- Add optional fields
-- Add new enum variants only when consumers are explicitly version-gated
-- Add new endpoints that do not alter existing response semantics
+- Keep changes explicit and documented.
+- Update tests together with contract changes.
+- Prefer small, reviewable contract diffs.
 
-## Breaking changes
+## Practical guidance
 
-The following require a major version bump:
+- If a change affects consumers, document the impact in README and docs.
+- If behavior changes, update related tests and examples in the same change.
+- If a field or endpoint is removed, keep rationale in commit history or decision log.
 
-- Remove or rename required fields
-- Change field type or meaning
-- Remove supported action or status value
-- Change deterministic behavior for the same input/policy/state tuple
+## Notes
 
-## Deprecation process
-
-1. Mark as deprecated in docs
-2. Keep compatibility for at least one minor release
-3. Remove only in next major version with migration note
-
-## Enforcement
-
-- Schema drift tests must pass in CI
-- Golden determinism tests must pass in CI
-- Breaking contracts must include migration documentation
+This project is OSS and also used in personal workflows.
+The goal is to keep contracts usable and understandable, without unnecessary process overhead.

@@ -1,9 +1,9 @@
-# Operational Runbook (v1.0.0 Target)
+# Operational Runbook
 
 ## Health checks
 
-- `GET /v1/healthz` must return `200 ok`
-- CI pipeline (`fmt-check`, `lint`, `test`, `build`) must pass on mainline
+- `GET /v1/healthz` should return `200 ok`
+- CI pipeline (`fmt-check`, `lint`, `test`, `build`) should pass on mainline
 
 ## Incident triage order
 

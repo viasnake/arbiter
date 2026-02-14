@@ -2,19 +2,20 @@
 
 ## Intent
 
-Arbiter exists to keep decision-making deterministic and inspectable.
-The core architectural choice is to isolate policy judgment from content generation and execution.
+Arbiter exists to keep decision behavior visible and explainable.
+The main architectural choice is to separate decision logic from execution.
 
-## Why deterministic control first
+## Core model
 
-AI systems are often judged after incidents.
-If the control path is non-deterministic, root cause analysis becomes speculative.
+At a high level, Arbiter evaluates an input event and returns a response plan.
 
-Determinism is therefore a risk-control requirement, not a convenience.
+`process(Event) -> ResponsePlan`
 
-## Why strict pipeline ordering
+The plan describes what should happen next. It does not execute the action.
 
-The pipeline order is fixed to make behavior predictable and auditable:
+## Pipeline shape
+
+Current processing flow:
 
 1. schema validation
 2. idempotency check
@@ -25,20 +26,26 @@ The pipeline order is fixed to make behavior predictable and auditable:
 7. response plan emit
 8. audit persist
 
-Changing order changes semantics and creates hidden policy drift.
+Keeping this order stable helps preserve operational predictability.
+
+## Why determinism matters
+
+Incident analysis becomes difficult when control paths drift between retries.
+Deterministic decision paths make behavior easier to replay and debug.
 
 ## Why single binary
 
-Single-binary operation reduces operational dependency risk for the control plane.
-It lowers failure surface during incidents and keeps deployment reproducible.
+Single-binary operation keeps deployment and rollback simple for a small project.
+This reduces operational moving parts in day-to-day use.
 
-## What is intentionally excluded
+## Intentionally out of scope
 
-Arbiter intentionally excludes:
+Arbiter does not aim to provide:
 
-- LLM generation
+- LLM text generation
 - prompt management
 - agent runtime loops
 - tool execution
+- connector-specific adapter logic
 
-This boundary protects control-plane clarity and limits blast radius.
+Those belong to external components that consume Arbiter plans.

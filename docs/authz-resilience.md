@@ -1,8 +1,8 @@
-# AuthZ Resilience Policy
+# AuthZ Resilience
 
 ## Scope
 
-This policy defines timeout, retry, and circuit-breaker behavior for `authz.mode=external_http`.
+This document describes current timeout, retry, and circuit-breaker behavior for `authz.mode=external_http`.
 
 ## Timeout
 
@@ -24,5 +24,5 @@ This policy defines timeout, retry, and circuit-breaker behavior for `authz.mode
 
 ## Fail mode interaction
 
-- Final outcome still follows `authz.fail_mode` (`deny`, `allow`, `fallback_builtin`).
-- Production recommendation remains fail-closed (`deny`).
+- Final outcome follows `authz.fail_mode` (`deny`, `allow`, `fallback_builtin`).
+- In many environments, fail-closed (`deny`) is the safer default.

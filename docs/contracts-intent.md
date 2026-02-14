@@ -2,13 +2,16 @@
 
 ## Why contracts exist
 
-Contracts are the long-lived boundary of the control plane.
-They are designed to keep producer and consumer responsibilities explicit.
+Contracts define the current integration shape between Arbiter and its clients.
+They make producer and consumer responsibilities explicit.
+
+Contracts may evolve when practical needs change.
+The goal is clarity, not rigidity.
 
 ## Event intent
 
 `Event` is normalized input, not raw transport payload.
-Its role is to provide a stable decision surface independent of adapters.
+Its role is to provide a consistent decision surface independent of adapters.
 
 ## ResponsePlan intent
 
@@ -17,12 +20,14 @@ It says what should happen next, without performing the action.
 
 ## Action taxonomy intent
 
-v1.0.0 keeps action types intentionally small:
+Action types are intentionally small:
 
 - no-op (`do_nothing`)
 - request generation
 - send message
 - send reply
+- start agent job
+- request approval
 
 The narrow taxonomy prevents premature coupling to runtime specifics.
 
@@ -34,4 +39,4 @@ This enables external policy engines without embedding their semantics in Arbite
 ## OpenAPI intent
 
 OpenAPI provides transport discoverability.
-Behavioral guarantees come from RFC invariants and contracts, not from transport shape alone.
+Behavioral guarantees come from implementation behavior and tests, not from transport shape alone.

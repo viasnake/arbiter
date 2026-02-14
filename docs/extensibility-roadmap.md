@@ -2,53 +2,53 @@
 
 ## Purpose
 
-This roadmap describes extension seams that preserve v1.0.0 invariants.
+This roadmap describes extension seams while keeping current behavior understandable.
 
-## Invariants to preserve
+## Current baseline
 
 - deterministic `process(Event) -> ResponsePlan`
 - fixed pipeline ordering
 - idempotency for `(tenant_id, event_id)`
 - append-only audit semantics
 
-## Planned extension areas
+## Implemented extension areas
 
-## 1) Job lifecycle actions
+### 1) Job lifecycle actions
 
-Potential additions:
+Available interfaces:
 
 - `start_agent_job`
 - job status updates and cancellation paths
 
-Design constraint:
-job orchestration should remain outside Arbiter execution responsibilities.
+Note:
+job orchestration remains outside Arbiter execution responsibilities.
 
-## 2) Approval workflows
+### 2) Approval workflows
 
-Potential additions:
+Available interfaces:
 
 - `request_approval`
-- multi-step policy checkpoints
 
-Design constraint:
-approval state should be explicit and auditable as policy decisions.
+Current behavior supports explicit approval events and timeout/escalation metadata.
 
-## 3) Audit integrity upgrades
+Note:
+approval state is kept explicit and auditable as policy decisions.
 
-Potential additions:
+### 3) Audit integrity
+
+Available capabilities:
 
 - hash chain linking audit records
 - external immutable sinks
 
-Design constraint:
-existing JSONL consumers should remain backward compatible.
+### 4) Durable state
 
-## 4) Multi-region and durable state
+Available capabilities:
 
-Potential additions:
+- durable idempotency, room, pending, tenant rate, and audit in sqlite
 
-- durable idempotency store
-- cross-region consistency policies
+## Future topics (open)
 
-Design constraint:
-deterministic output must hold given equivalent inputs and policy snapshots.
+- additional store backends
+- stronger audit integrity integration with external systems
+- optional policy module expansion for builtin authz
