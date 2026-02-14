@@ -553,6 +553,66 @@ async fn sqlite_store_persists_audit_records() {
 }
 
 #[tokio::test]
+async fn sqlite_store_persists_room_state_across_app_restart() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let db_path = std::env::temp_dir().join(format!("arbiter-store-room-{nanos}.db"));
+    let db_path_str = db_path.to_string_lossy().to_string();
+
+    let app1 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+
+    let first_event = sample_event("evt-room-state-1");
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(first_event.to_string()))
+        .unwrap();
+    let res1 = app1.clone().oneshot(req1).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+    let body1 = axum::body::to_bytes(res1.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan1: Value = serde_json::from_slice(&body1).unwrap();
+
+    let generation = json!({
+        "v": 1,
+        "plan_id": plan1["plan_id"],
+        "action_id": plan1["actions"][0]["action_id"],
+        "tenant_id": "tenant-a",
+        "text": "generated"
+    });
+    let gen_req = Request::builder()
+        .method("POST")
+        .uri("/v1/generations")
+        .header("content-type", "application/json")
+        .body(Body::from(generation.to_string()))
+        .unwrap();
+    let gen_res = app1.oneshot(gen_req).await.unwrap();
+    assert_eq!(gen_res.status(), StatusCode::OK);
+
+    let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let second_event = sample_event("evt-room-state-2");
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(second_event.to_string()))
+        .unwrap();
+    let res2 = app2.oneshot(req2).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+    let body2 = axum::body::to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan2: Value = serde_json::from_slice(&body2).unwrap();
+
+    assert_eq!(plan2["actions"][0]["type"], "do_nothing");
+    assert_eq!(plan2["actions"][0]["payload"]["reason_code"], "gate_cooldown");
+}
+
+#[tokio::test]
 async fn external_authz_invalid_contract_is_denied_in_fail_closed_mode() {
     let endpoint = spawn_mock_authz_invalid_policy_version().await;
     let mut cfg = test_config();
