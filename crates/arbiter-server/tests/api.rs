@@ -401,6 +401,91 @@ async fn idempotency_same_event_same_plan() {
     assert_eq!(p1, p2);
 }
 
+#[tokio::test]
+async fn idempotency_same_event_different_payload_returns_conflict() {
+    let app = build_app(test_config()).await.unwrap();
+    let event = sample_event("evt-1-conflict");
+
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res1 = app.clone().oneshot(req1).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+
+    let mut mutated = event;
+    mutated["content"]["text"] = Value::String("hello from mismatch".to_string());
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(mutated.to_string()))
+        .unwrap();
+    let res2 = app.oneshot(req2).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error"]["code"], "conflict.payload_mismatch");
+    assert!(payload["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("existing_hash="));
+    assert!(payload["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("incoming_hash="));
+}
+
+#[tokio::test]
+async fn sqlite_idempotency_same_event_different_payload_returns_conflict() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let db_path = std::env::temp_dir().join(format!("arbiter-store-event-conflict-{nanos}.db"));
+    let db_path_str = db_path.to_string_lossy().to_string();
+
+    let app1 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let event = sample_event("evt-sqlite-conflict");
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(event.to_string()))
+        .unwrap();
+    let res1 = app1.oneshot(req1).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+
+    let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let mut mutated = sample_event("evt-sqlite-conflict");
+    mutated["content"]["text"] = Value::String("hello from mismatch".to_string());
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .body(Body::from(mutated.to_string()))
+        .unwrap();
+    let res2 = app2.oneshot(req2).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error"]["code"], "conflict.payload_mismatch");
+}
+
+#[tokio::test]
+async fn build_app_rejects_invalid_store_kind() {
+    let mut cfg = test_config();
+    cfg.store.kind = "invalid".to_string();
+    let err = build_app(cfg).await.unwrap_err();
+    assert!(err.contains("config.invalid_store_kind"));
+}
+
 #[test]
 fn event_input_and_plan_output_match_schemas() {
     let event_schema_text =
