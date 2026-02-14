@@ -758,6 +758,81 @@ async fn sqlite_store_persists_room_state_across_app_restart() {
 }
 
 #[tokio::test]
+async fn sqlite_store_persists_job_and_approval_read_state() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let db_path = std::env::temp_dir().join(format!("arbiter-store-state-read-{nanos}.db"));
+    let db_path_str = db_path.to_string_lossy().to_string();
+
+    let app1 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+
+    let job_event = Request::builder()
+        .method("POST")
+        .uri("/v1/job-events")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "v": 1,
+                "event_id": "job-state-sqlite-1",
+                "tenant_id": "tenant-a",
+                "job_id": "job-sqlite-1",
+                "status": "started",
+                "ts": "2026-02-14T00:00:00Z"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let _ = app1.clone().oneshot(job_event).await.unwrap();
+
+    let approval_event = Request::builder()
+        .method("POST")
+        .uri("/v1/approval-events")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "v": 1,
+                "event_id": "approval-state-sqlite-1",
+                "tenant_id": "tenant-a",
+                "approval_id": "approval-sqlite-1",
+                "status": "requested",
+                "ts": "2026-02-14T00:00:00Z"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let _ = app1.oneshot(approval_event).await.unwrap();
+
+    let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let job_read = Request::builder()
+        .method("GET")
+        .uri("/v1/jobs/tenant-a/job-sqlite-1")
+        .body(Body::empty())
+        .unwrap();
+    let job_res = app2.clone().oneshot(job_read).await.unwrap();
+    assert_eq!(job_res.status(), StatusCode::OK);
+    let job_body = axum::body::to_bytes(job_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let job_json: Value = serde_json::from_slice(&job_body).unwrap();
+    assert_eq!(job_json["status"], "started");
+
+    let approval_read = Request::builder()
+        .method("GET")
+        .uri("/v1/approvals/tenant-a/approval-sqlite-1")
+        .body(Body::empty())
+        .unwrap();
+    let approval_res = app2.oneshot(approval_read).await.unwrap();
+    assert_eq!(approval_res.status(), StatusCode::OK);
+    let approval_body = axum::body::to_bytes(approval_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let approval_json: Value = serde_json::from_slice(&approval_body).unwrap();
+    assert_eq!(approval_json["status"], "requested");
+}
+
+#[tokio::test]
 async fn external_authz_invalid_contract_is_denied_in_fail_closed_mode() {
     let endpoint = spawn_mock_authz_invalid_policy_version().await;
     let mut cfg = test_config();
