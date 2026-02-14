@@ -57,3 +57,24 @@ This log captures decisions with rationale, trade-offs, and re-evaluation trigge
 - Why: incident diagnostics require retrievable, deterministic state snapshots.
 - Trade-off: no implicit/background transitions; expiration requires explicit event input.
 - Revisit when: deterministic clock-driven state derivation is formally defined.
+
+## D-009: v1.2.0 uses envelope-based protocol contracts
+
+- Decision: replace provider-shaped contracts with provider-agnostic event/action/plan envelopes.
+- Why: Arbiter must be reusable governance infrastructure, not a provider integration bundle.
+- Trade-off: v1.1.x payloads are intentionally incompatible.
+- Revisit when: a future major protocol revision is required.
+
+## D-010: fingerprints use JCS (RFC8785) + sha256 only
+
+- Decision: canonicalization for idempotency and capability fingerprints is fixed to JCS + sha256.
+- Why: deterministic hash behavior must not depend on object ordering, whitespace, or number formatting variations.
+- Trade-off: implementation must preserve strict canonicalization behavior and test fixtures.
+- Revisit when: standards evolve and migration path is explicitly designed.
+
+## D-011: decision time is derived from input timestamps
+
+- Decision: plan evaluation time is derived from `event.occurred_at`; wall-clock is excluded from decision paths.
+- Why: deterministic replay requires identical outputs for identical stored state and identical input payload.
+- Trade-off: time-based runtime heuristics are excluded unless explicitly input-driven.
+- Revisit when: deterministic, explicit clock inputs are added as protocol fields.
