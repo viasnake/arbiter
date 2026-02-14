@@ -7,6 +7,7 @@ use axum::{Json, Router};
 use jsonschema::Validator;
 use rusqlite::Connection;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -191,6 +192,35 @@ async fn healthz_ok() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn contracts_endpoint_exposes_source_hashes() {
+    let app = build_app(test_config()).await.unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/contracts")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+
+    let openapi = std::fs::read_to_string(repo_path("openapi/v1.yaml")).unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(openapi.as_bytes());
+    let expected: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
+    assert_eq!(payload["openapi_sha256"], expected);
+    assert!(payload["contracts_set_sha256"].as_str().is_some());
+    assert!(payload["schemas"]["event"].as_str().is_some());
 }
 
 #[tokio::test]

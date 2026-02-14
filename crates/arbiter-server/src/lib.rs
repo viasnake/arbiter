@@ -69,6 +69,7 @@ struct AppState {
     store: Arc<Mutex<StoreBackend>>,
     audit: Arc<AuditJsonl>,
     authz: Arc<AuthzEngine>,
+    contracts_metadata: Arc<Value>,
 }
 
 impl AppState {
@@ -93,6 +94,7 @@ impl AppState {
                 )
                 .await?,
             ),
+            contracts_metadata: Arc::new(generate_contracts_metadata()?),
             store: Arc::new(Mutex::new(store)),
             cfg,
         })
@@ -581,25 +583,8 @@ async fn healthz() -> (StatusCode, &'static str) {
     (StatusCode::OK, "ok")
 }
 
-async fn contracts() -> Json<Value> {
-    Json(json!({
-        "version": "1.0.0",
-        "actions": {
-            "enabled": [
-                "do_nothing",
-                "request_generation",
-                "send_message",
-                "send_reply",
-                "start_agent_job",
-                "request_approval"
-            ],
-            "reserved": []
-        },
-        "inputs": {
-            "job_events": ["started", "heartbeat", "completed", "failed", "cancelled"],
-            "approval_events": ["requested", "approved", "rejected", "expired"]
-        }
-    }))
+async fn contracts(State(state): State<AppState>) -> Json<Value> {
+    Json((*state.contracts_metadata).clone())
 }
 
 async fn job_state(
@@ -2195,6 +2180,110 @@ fn hash_hex(input: &[u8]) -> String {
     let digest = hasher.finalize();
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+fn generate_contracts_metadata() -> Result<Value, String> {
+    let openapi_sha256 = hash_hex(OPENAPI_V1.as_bytes());
+    let mut schemas = Map::new();
+    let mut contracts_hasher = Sha256::new();
+
+    let mut contract_entries = embedded_contract_schemas();
+    contract_entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, body) in &contract_entries {
+        let schema_hash = hash_hex(body.as_bytes());
+        schemas.insert((*name).to_string(), Value::String(schema_hash));
+        contracts_hasher.update(name.as_bytes());
+        contracts_hasher.update(b":");
+        contracts_hasher.update(body.as_bytes());
+    }
+    let contracts_set_sha256: String = contracts_hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
+    let actions = schema_enum_values("action", "properties.type.enum")?;
+    let job_events = schema_enum_values("job_status_event", "properties.status.enum")?;
+    let approval_events = schema_enum_values("approval_event", "properties.status.enum")?;
+
+    Ok(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "openapi_sha256": openapi_sha256,
+        "contracts_set_sha256": contracts_set_sha256,
+        "generated_at": format!("pkg:{}", env!("CARGO_PKG_VERSION")),
+        "actions": {
+            "enabled": actions,
+            "reserved": []
+        },
+        "inputs": {
+            "job_events": job_events,
+            "approval_events": approval_events
+        },
+        "schemas": schemas
+    }))
+}
+
+fn schema_enum_values(schema_name: &str, path: &str) -> Result<Vec<String>, String> {
+    let body = embedded_contract_schemas()
+        .into_iter()
+        .find(|(name, _)| *name == schema_name)
+        .map(|(_, text)| text)
+        .ok_or_else(|| format!("missing schema: {schema_name}"))?;
+    let value: Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    let mut current = &value;
+    for part in path.split('.') {
+        current = current
+            .get(part)
+            .ok_or_else(|| format!("schema path not found: {schema_name}:{path}"))?;
+    }
+    let arr = current
+        .as_array()
+        .ok_or_else(|| format!("schema enum path is not array: {schema_name}:{path}"))?;
+    Ok(arr
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect())
+}
+
+fn embedded_contract_schemas() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("action", include_str!("../../../contracts/v1/action.schema.json")),
+        (
+            "action_result",
+            include_str!("../../../contracts/v1/action_result.schema.json"),
+        ),
+        (
+            "approval_event",
+            include_str!("../../../contracts/v1/approval_event.schema.json"),
+        ),
+        (
+            "authz_decision",
+            include_str!("../../../contracts/v1/authz_decision.schema.json"),
+        ),
+        (
+            "authz_request",
+            include_str!("../../../contracts/v1/authz_request.schema.json"),
+        ),
+        ("event", include_str!("../../../contracts/v1/event.schema.json")),
+        (
+            "generation_result",
+            include_str!("../../../contracts/v1/generation_result.schema.json"),
+        ),
+        (
+            "job_cancel_request",
+            include_str!("../../../contracts/v1/job_cancel_request.schema.json"),
+        ),
+        (
+            "job_status_event",
+            include_str!("../../../contracts/v1/job_status_event.schema.json"),
+        ),
+        (
+            "response_plan",
+            include_str!("../../../contracts/v1/response_plan.schema.json"),
+        ),
+    ]
+}
+
+const OPENAPI_V1: &str = include_str!("../../../openapi/v1.yaml");
 
 pub fn verify_audit_chain(path: &str) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
