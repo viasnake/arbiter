@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.1
+
+### Added
+
+- Event idempotency semantics document: `docs/state/events.md`.
+- API error code catalog: `docs/errors.md`.
+
+### Changed
+
+- `POST /v1/events` now rejects duplicate `(tenant_id, event_id)` with payload mismatch using `409 conflict.payload_mismatch` and hash diagnostics.
+- `build_app` now rejects unsupported `store.kind` in all paths with `config.invalid_store_kind`.
+- README (EN/JA) now documents event duplicate conflict behavior and links the new state/error docs.
+
+### Fixed
+
+- Added memory/sqlite tests for duplicate event payload mismatch conflict behavior.
+- Added test coverage for invalid `store.kind` startup failure.
+
 ## 1.1.0
 
 ### Added
