@@ -341,6 +341,60 @@ async fn sqlite_event_idempotency_payload_mismatch_returns_409() {
 }
 
 #[tokio::test]
+async fn sqlite_action_result_payload_mismatch_returns_409() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let db_path = std::env::temp_dir().join(format!("arbiter-sqlite-action-result-{nanos}.db"));
+    let db_path_str = db_path.to_string_lossy().to_string();
+
+    let app1 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let first = json!({
+        "tenant_id": "tenant-a",
+        "plan_id": "plan-z",
+        "action_id": "act-z",
+        "status": "succeeded",
+        "occurred_at": "2026-02-14T00:00:00Z",
+        "evidence": {"external_id": "1"}
+    });
+    let first_res = app1
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/action-results")
+                .header("content-type", "application/json")
+                .body(Body::from(first.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_res.status(), StatusCode::NO_CONTENT);
+
+    let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
+    let second = json!({
+        "tenant_id": "tenant-a",
+        "plan_id": "plan-z",
+        "action_id": "act-z",
+        "status": "failed",
+        "occurred_at": "2026-02-14T00:00:00Z",
+        "evidence": {"external_id": "2"}
+    });
+    let second_res = app2
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/action-results")
+                .header("content-type", "application/json")
+                .body(Body::from(second.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_res.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn audit_chain_verification_detects_tampering() {
     let cfg = test_config();
     let audit_path = cfg.audit.jsonl_path.clone();

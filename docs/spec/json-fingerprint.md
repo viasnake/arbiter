@@ -11,6 +11,7 @@ Arbiter uses a single canonical fingerprint rule:
 - Key order does not change hash.
 - Whitespace does not change hash.
 - Equivalent numeric forms hash identically when JCS-canonicalized.
+- Unicode strings are normalized per JSON string rules and escaped canonically by JCS.
 
 ## Scope
 
