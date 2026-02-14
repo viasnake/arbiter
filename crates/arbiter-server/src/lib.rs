@@ -46,14 +46,14 @@ pub async fn serve(cfg: Config) -> Result<(), String> {
 pub async fn build_app(cfg: Config) -> Result<Router, String> {
     let state = AppState::new(cfg).await?;
     Ok(Router::new()
-        .route("/v0/healthz", get(healthz))
-        .route("/v0/events", post(events))
-        .route("/v0/generations", post(generations))
-        .route("/v0/job-events", post(job_events))
-        .route("/v0/job-cancel", post(job_cancel))
-        .route("/v0/approval-events", post(approval_events))
-        .route("/v0/action-results", post(action_results))
-        .route("/v0/contracts", get(contracts))
+        .route("/v1/healthz", get(healthz))
+        .route("/v1/events", post(events))
+        .route("/v1/generations", post(generations))
+        .route("/v1/job-events", post(job_events))
+        .route("/v1/job-cancel", post(job_cancel))
+        .route("/v1/approval-events", post(approval_events))
+        .route("/v1/action-results", post(action_results))
+        .route("/v1/contracts", get(contracts))
         .with_state(state))
 }
 
@@ -320,7 +320,7 @@ impl AppState {
 
     async fn process_generation(&self, input: GenerationResult) -> Result<ResponsePlan, String> {
         if input.v != CONTRACT_VERSION {
-            return Err("v must be 0".to_string());
+            return Err("v must be 1".to_string());
         }
         if input.tenant_id.is_empty() || input.plan_id.is_empty() || input.action_id.is_empty() {
             return Err("tenant_id, plan_id, action_id are required".to_string());
@@ -388,7 +388,7 @@ impl AppState {
 
     async fn process_job_status(&self, input: JobStatusEvent) -> Result<ResponsePlan, String> {
         if input.v != CONTRACT_VERSION {
-            return Err("v must be 0".to_string());
+            return Err("v must be 1".to_string());
         }
         if input.event_id.is_empty() || input.tenant_id.is_empty() || input.job_id.is_empty() {
             return Err("event_id, tenant_id, job_id are required".to_string());
@@ -455,7 +455,7 @@ impl AppState {
 
     async fn process_job_cancel(&self, input: JobCancelRequest) -> Result<ResponsePlan, String> {
         if input.v != CONTRACT_VERSION {
-            return Err("v must be 0".to_string());
+            return Err("v must be 1".to_string());
         }
         if input.event_id.is_empty() || input.tenant_id.is_empty() || input.job_id.is_empty() {
             return Err("event_id, tenant_id, job_id are required".to_string());
@@ -504,7 +504,7 @@ impl AppState {
 
     async fn process_approval_event(&self, input: ApprovalEvent) -> Result<ResponsePlan, String> {
         if input.v != CONTRACT_VERSION {
-            return Err("v must be 0".to_string());
+            return Err("v must be 1".to_string());
         }
         if input.event_id.is_empty() || input.tenant_id.is_empty() || input.approval_id.is_empty() {
             return Err("event_id, tenant_id, approval_id are required".to_string());
@@ -572,7 +572,7 @@ async fn healthz() -> (StatusCode, &'static str) {
 
 async fn contracts() -> Json<Value> {
     Json(json!({
-        "version": "0.0.1",
+        "version": "1.0.0",
         "actions": {
             "enabled": [
                 "do_nothing",
@@ -1640,7 +1640,7 @@ pub fn verify_audit_chain(path: &str) -> Result<String, String> {
 
 fn validate_event(e: &Event) -> Result<(), String> {
     if e.v != CONTRACT_VERSION {
-        return Err("v must be 0".to_string());
+        return Err("v must be 1".to_string());
     }
     if e.event_id.is_empty()
         || e.tenant_id.is_empty()
@@ -1665,7 +1665,7 @@ fn validate_event(e: &Event) -> Result<(), String> {
 
 fn validate_response_plan(p: &ResponsePlan) -> Result<(), String> {
     if p.v != CONTRACT_VERSION {
-        return Err("response_plan.v must be 0".to_string());
+        return Err("response_plan.v must be 1".to_string());
     }
     if p.plan_id.is_empty() || p.tenant_id.is_empty() || p.actions.is_empty() {
         return Err("invalid response plan".to_string());
@@ -1719,7 +1719,7 @@ mod tests {
     #[test]
     fn validate_response_plan_rejects_empty_actions() {
         let p = ResponsePlan {
-            v: 0,
+            v: CONTRACT_VERSION,
             plan_id: "p".to_string(),
             tenant_id: "t".to_string(),
             room_id: "r".to_string(),

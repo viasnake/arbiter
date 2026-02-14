@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/contracts/v0/approval_event.schema.json",
+  "$id": "https://arbiter.dev/contracts/v1/approval_event.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["v", "event_id", "tenant_id", "approval_id", "status", "ts"],
   "properties": {
-    "v": { "type": "integer", "const": 0 },
+    "v": { "type": "integer", "const": 1 },
     "event_id": { "type": "string", "minLength": 1 },
     "tenant_id": { "type": "string", "minLength": 1 },
     "approval_id": { "type": "string", "minLength": 1 },

@@ -76,7 +76,7 @@ fn test_config_sqlite(db_path: &str) -> Config {
 async fn spawn_mock_authz_invalid_policy_version() -> String {
     async fn handler() -> Json<Value> {
         Json(json!({
-            "v": 0,
+            "v": 1,
             "decision": "allow",
             "reason_code": "ok",
             "policy_version": "",
@@ -85,13 +85,13 @@ async fn spawn_mock_authz_invalid_policy_version() -> String {
         }))
     }
 
-    let app = Router::new().route("/v0/authorize", post(handler));
+    let app = Router::new().route("/v1/authorize", post(handler));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    format!("http://{addr}/v0/authorize")
+    format!("http://{addr}/v1/authorize")
 }
 
 async fn spawn_mock_authz_flaky_then_allow() -> String {
@@ -99,7 +99,7 @@ async fn spawn_mock_authz_flaky_then_allow() -> String {
     let calls_clone = Arc::clone(&calls);
     async fn ok_decision() -> Json<Value> {
         Json(json!({
-            "v": 0,
+            "v": 1,
             "decision": "allow",
             "reason_code": "ok",
             "policy_version": "policy:v1",
@@ -109,7 +109,7 @@ async fn spawn_mock_authz_flaky_then_allow() -> String {
     }
 
     let app = Router::new().route(
-        "/v0/authorize",
+        "/v1/authorize",
         post(move || {
             let calls = Arc::clone(&calls_clone);
             async move {
@@ -130,12 +130,12 @@ async fn spawn_mock_authz_flaky_then_allow() -> String {
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    format!("http://{addr}/v0/authorize")
+    format!("http://{addr}/v1/authorize")
 }
 
 async fn spawn_mock_authz_always_500(counter: Arc<AtomicUsize>) -> String {
     let app = Router::new().route(
-        "/v0/authorize",
+        "/v1/authorize",
         post(move || {
             let c = Arc::clone(&counter);
             async move {
@@ -152,12 +152,12 @@ async fn spawn_mock_authz_always_500(counter: Arc<AtomicUsize>) -> String {
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    format!("http://{addr}/v0/authorize")
+    format!("http://{addr}/v1/authorize")
 }
 
 fn sample_event(event_id: &str) -> Value {
     json!({
-        "v": 0,
+        "v": 1,
         "event_id": event_id,
         "tenant_id": "tenant-a",
         "source": "slack",
@@ -184,7 +184,7 @@ async fn healthz_ok() {
     let res = app
         .oneshot(
             Request::builder()
-                .uri("/v0/healthz")
+                .uri("/v1/healthz")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -200,7 +200,7 @@ async fn idempotency_same_event_same_plan() {
 
     let req1 = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -213,7 +213,7 @@ async fn idempotency_same_event_same_plan() {
 
     let req2 = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -230,15 +230,15 @@ async fn idempotency_same_event_same_plan() {
 #[test]
 fn event_input_and_plan_output_match_schemas() {
     let event_schema_text =
-        std::fs::read_to_string(repo_path("contracts/v0/event.schema.json")).unwrap();
+        std::fs::read_to_string(repo_path("contracts/v1/event.schema.json")).unwrap();
     let event_schema: Value = serde_json::from_str(&event_schema_text).unwrap();
     let event_validator: Validator = jsonschema::validator_for(&event_schema).unwrap();
 
     let plan_schema_text =
-        std::fs::read_to_string(repo_path("contracts/v0/response_plan.schema.json")).unwrap();
+        std::fs::read_to_string(repo_path("contracts/v1/response_plan.schema.json")).unwrap();
     let mut plan_schema: Value = serde_json::from_str(&plan_schema_text).unwrap();
     let action_schema_text =
-        std::fs::read_to_string(repo_path("contracts/v0/action.schema.json")).unwrap();
+        std::fs::read_to_string(repo_path("contracts/v1/action.schema.json")).unwrap();
     let action_schema: Value = serde_json::from_str(&action_schema_text).unwrap();
     plan_schema["properties"]["actions"]["items"]["$ref"] =
         Value::String("#/$defs/action".to_string());
@@ -253,7 +253,7 @@ fn event_input_and_plan_output_match_schemas() {
         let app = build_app(test_config()).await.unwrap();
         let req = Request::builder()
             .method("POST")
-            .uri("/v0/events")
+            .uri("/v1/events")
             .header("content-type", "application/json")
             .body(Body::from(event.to_string()))
             .unwrap();
@@ -302,7 +302,7 @@ async fn golden_determinism_vectors_if_present() {
 
         let req = Request::builder()
             .method("POST")
-            .uri("/v0/events")
+            .uri("/v1/events")
             .header("content-type", "application/json")
             .body(Body::from(event_text))
             .unwrap();
@@ -332,7 +332,7 @@ async fn audit_trace_includes_authz_when_enabled() {
 
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -357,7 +357,7 @@ async fn audit_trace_omits_authz_when_disabled() {
 
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -380,7 +380,7 @@ async fn cooldown_uses_server_time_even_when_event_ts_is_future_or_past() {
     let first_event = sample_event("evt-cooldown-1");
     let req1 = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(first_event.to_string()))
         .unwrap();
@@ -394,7 +394,7 @@ async fn cooldown_uses_server_time_even_when_event_ts_is_future_or_past() {
     let plan_id = plan1["plan_id"].as_str().unwrap();
 
     let generation = json!({
-        "v": 0,
+        "v": 1,
         "plan_id": plan_id,
         "action_id": action_id,
         "tenant_id": "tenant-a",
@@ -402,7 +402,7 @@ async fn cooldown_uses_server_time_even_when_event_ts_is_future_or_past() {
     });
     let gen_req = Request::builder()
         .method("POST")
-        .uri("/v0/generations")
+        .uri("/v1/generations")
         .header("content-type", "application/json")
         .body(Body::from(generation.to_string()))
         .unwrap();
@@ -417,7 +417,7 @@ async fn cooldown_uses_server_time_even_when_event_ts_is_future_or_past() {
         event["ts"] = Value::String(ts.to_string());
         let req = Request::builder()
             .method("POST")
-            .uri("/v0/events")
+            .uri("/v1/events")
             .header("content-type", "application/json")
             .body(Body::from(event.to_string()))
             .unwrap();
@@ -449,7 +449,7 @@ async fn sqlite_store_keeps_idempotency_across_app_restart() {
     let app1 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
     let req1 = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -463,7 +463,7 @@ async fn sqlite_store_keeps_idempotency_across_app_restart() {
     let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
     let req2 = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -490,7 +490,7 @@ async fn sqlite_store_persists_audit_records() {
     let event = sample_event("evt-sqlite-audit");
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -518,7 +518,7 @@ async fn external_authz_invalid_contract_is_denied_in_fail_closed_mode() {
     let event = sample_event("evt-authz-invalid-contract");
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -550,7 +550,7 @@ async fn external_authz_retries_and_recovers_on_second_attempt() {
     let app = build_app(cfg).await.unwrap();
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(sample_event("evt-authz-retry").to_string()))
         .unwrap();
@@ -580,7 +580,7 @@ async fn external_authz_circuit_breaker_short_circuits_repeated_failures() {
     for event_id in ["evt-authz-cb-1", "evt-authz-cb-2"] {
         let req = Request::builder()
             .method("POST")
-            .uri("/v0/events")
+            .uri("/v1/events")
             .header("content-type", "application/json")
             .body(Body::from(sample_event(event_id).to_string()))
             .unwrap();
@@ -599,7 +599,7 @@ async fn can_choose_start_agent_job_action_via_extension() {
 
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -612,7 +612,7 @@ async fn can_choose_start_agent_job_action_via_extension() {
     assert_eq!(plan["actions"][0]["type"], "start_agent_job");
 
     let generation = json!({
-        "v": 0,
+        "v": 1,
         "plan_id": plan["plan_id"],
         "action_id": plan["actions"][0]["action_id"],
         "tenant_id": "tenant-a",
@@ -620,7 +620,7 @@ async fn can_choose_start_agent_job_action_via_extension() {
     });
     let gen_req = Request::builder()
         .method("POST")
-        .uri("/v0/generations")
+        .uri("/v1/generations")
         .header("content-type", "application/json")
         .body(Body::from(generation.to_string()))
         .unwrap();
@@ -643,7 +643,7 @@ async fn can_choose_request_approval_action_via_extension() {
 
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -665,7 +665,7 @@ async fn audit_jsonl_records_are_hash_chained() {
     for event_id in ["evt-chain-1", "evt-chain-2"] {
         let req = Request::builder()
             .method("POST")
-            .uri("/v0/events")
+            .uri("/v1/events")
             .header("content-type", "application/json")
             .body(Body::from(sample_event(event_id).to_string()))
             .unwrap();
@@ -691,7 +691,7 @@ async fn audit_jsonl_records_are_hash_chained() {
 async fn job_status_event_is_idempotent() {
     let app = build_app(test_config()).await.unwrap();
     let payload = json!({
-        "v": 0,
+        "v": 1,
         "event_id": "job-status-evt-1",
         "tenant_id": "tenant-a",
         "job_id": "job-1",
@@ -701,7 +701,7 @@ async fn job_status_event_is_idempotent() {
 
     let req1 = Request::builder()
         .method("POST")
-        .uri("/v0/job-events")
+        .uri("/v1/job-events")
         .header("content-type", "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();
@@ -713,7 +713,7 @@ async fn job_status_event_is_idempotent() {
 
     let req2 = Request::builder()
         .method("POST")
-        .uri("/v0/job-events")
+        .uri("/v1/job-events")
         .header("content-type", "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();
@@ -730,7 +730,7 @@ async fn job_status_event_is_idempotent() {
 async fn job_cancel_event_is_idempotent() {
     let app = build_app(test_config()).await.unwrap();
     let payload = json!({
-        "v": 0,
+        "v": 1,
         "event_id": "job-cancel-evt-1",
         "tenant_id": "tenant-a",
         "job_id": "job-1",
@@ -739,7 +739,7 @@ async fn job_cancel_event_is_idempotent() {
 
     let req1 = Request::builder()
         .method("POST")
-        .uri("/v0/job-cancel")
+        .uri("/v1/job-cancel")
         .header("content-type", "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();
@@ -751,7 +751,7 @@ async fn job_cancel_event_is_idempotent() {
 
     let req2 = Request::builder()
         .method("POST")
-        .uri("/v0/job-cancel")
+        .uri("/v1/job-cancel")
         .header("content-type", "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();
@@ -774,7 +774,7 @@ async fn request_approval_plan_contains_timeout_and_id() {
 
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(event.to_string()))
         .unwrap();
@@ -797,11 +797,11 @@ async fn approval_expired_event_sets_escalation_debug_field() {
 
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/approval-events")
+        .uri("/v1/approval-events")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
-                "v": 0,
+                "v": 1,
                 "event_id": "approval-expired-1",
                 "tenant_id": "tenant-a",
                 "approval_id": "approval:1",
@@ -833,7 +833,7 @@ async fn immutable_mirror_sink_receives_audit_lines() {
     let app = build_app(cfg).await.unwrap();
     let req = Request::builder()
         .method("POST")
-        .uri("/v0/events")
+        .uri("/v1/events")
         .header("content-type", "application/json")
         .body(Body::from(sample_event("evt-mirror").to_string()))
         .unwrap();
@@ -853,7 +853,7 @@ async fn audit_verify_tool_accepts_valid_chain() {
     for event_id in ["evt-verify-1", "evt-verify-2"] {
         let req = Request::builder()
             .method("POST")
-            .uri("/v0/events")
+            .uri("/v1/events")
             .header("content-type", "application/json")
             .body(Body::from(sample_event(event_id).to_string()))
             .unwrap();

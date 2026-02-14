@@ -6,7 +6,7 @@ store:
 
 authz:
   mode: "external_http"
-  endpoint: "http://localhost:8081/v0/authorize"
+  endpoint: "http://localhost:8081/v1/authorize"
   timeout_ms: 300
   retry_max_attempts: 2
   retry_backoff_ms: 100

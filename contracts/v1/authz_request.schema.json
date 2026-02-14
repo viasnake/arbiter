@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/contracts/v0/authz_request.schema.json",
+  "$id": "https://arbiter.dev/contracts/v1/authz_request.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["v","tenant_id","correlation_id","actor","request"],
   "properties": {
-    "v": { "type": "integer", "const": 0 },
+    "v": { "type": "integer", "const": 1 },
     "tenant_id": { "type": "string" },
     "correlation_id": { "type": "string" },
     "actor": { "$ref": "#/$defs/actor" },

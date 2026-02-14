@@ -1,14 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/contracts/v0/job_cancel_request.schema.json",
+  "$id": "https://arbiter.dev/contracts/v1/job_status_event.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["v", "event_id", "tenant_id", "job_id", "ts"],
+  "required": ["v", "event_id", "tenant_id", "job_id", "status", "ts"],
   "properties": {
-    "v": { "type": "integer", "const": 0 },
+    "v": { "type": "integer", "const": 1 },
     "event_id": { "type": "string", "minLength": 1 },
     "tenant_id": { "type": "string", "minLength": 1 },
     "job_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["started", "heartbeat", "completed", "failed", "cancelled"] },
     "ts": { "type": "string", "format": "date-time" },
     "reason_code": { "type": ["string", "null"] }
   }

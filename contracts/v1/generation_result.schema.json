@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/contracts/v0/generation_result.schema.json",
+  "$id": "https://arbiter.dev/contracts/v1/generation_result.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["v","plan_id","action_id","tenant_id","text"],
   "properties": {
-    "v": { "type": "integer", "const": 0 },
+    "v": { "type": "integer", "const": 1 },
     "plan_id": { "type": "string", "minLength": 1 },
     "action_id": { "type": "string", "minLength": 1 },
     "tenant_id": { "type": "string", "minLength": 1 },

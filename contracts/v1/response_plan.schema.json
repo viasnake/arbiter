@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/contracts/v0/response_plan.schema.json",
+  "$id": "https://arbiter.dev/contracts/v1/response_plan.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["v","plan_id","tenant_id","room_id","actions"],
   "properties": {
-    "v": { "type": "integer", "const": 0 },
+    "v": { "type": "integer", "const": 1 },
     "plan_id": { "type": "string", "minLength": 1 },
     "tenant_id": { "type": "string", "minLength": 1 },
     "room_id": { "type": "string", "minLength": 1 },

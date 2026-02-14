@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: Arbiter API
-  version: 0.0.1
+  version: 1.0.0
 servers:
   - url: http://localhost:8080
 paths:
-  /v0/healthz:
+  /v1/healthz:
     get:
       summary: Health check
       responses:
@@ -15,7 +15,7 @@ paths:
             text/plain:
               schema: { type: string }
 
-  /v0/contracts:
+  /v1/contracts:
     get:
       summary: Contracts metadata (versions, action registry)
       responses:
@@ -27,7 +27,7 @@ paths:
                 type: object
                 additionalProperties: true
 
-  /v0/events:
+  /v1/events:
     post:
       summary: Submit Event
       description: Returns a deterministic ResponsePlan. Gate/AuthZ denials are represented as do_nothing action.
@@ -48,7 +48,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /v0/generations:
+  /v1/generations:
     post:
       summary: Submit GenerationResult
       requestBody:
@@ -68,7 +68,7 @@ paths:
             application/json:
                 schema: { $ref: "#/components/schemas/Error" }
 
-  /v0/job-events:
+  /v1/job-events:
     post:
       summary: Submit job lifecycle status event
       requestBody:
@@ -88,7 +88,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /v0/job-cancel:
+  /v1/job-cancel:
     post:
       summary: Submit job cancellation request event
       requestBody:
@@ -108,7 +108,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /v0/approval-events:
+  /v1/approval-events:
     post:
       summary: Submit approval workflow event
       requestBody:
@@ -128,9 +128,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /v0/action-results:
+  /v1/action-results:
     post:
-      summary: Report action execution result (optional in v0.0.1 but reserved)
+      summary: Report action execution result (action execution result reporting)
       requestBody:
         required: true
         content:
@@ -154,7 +154,7 @@ components:
       additionalProperties: false
       required: [v, event_id, tenant_id, source, room_id, actor, content, ts]
       properties:
-        v: { type: integer, const: 0 }
+        v: { type: integer, const: 1 }
         event_id: { type: string, minLength: 1 }
         tenant_id: { type: string, minLength: 1 }
         source: { type: string, minLength: 1 }
@@ -203,7 +203,7 @@ components:
       additionalProperties: false
       required: [v, plan_id, tenant_id, room_id, actions]
       properties:
-        v: { type: integer, const: 0 }
+        v: { type: integer, const: 1 }
         plan_id: { type: string, minLength: 1 }
         tenant_id: { type: string, minLength: 1 }
         room_id: { type: string, minLength: 1 }
@@ -219,7 +219,7 @@ components:
       additionalProperties: false
       required: [v, plan_id, action_id, tenant_id, text]
       properties:
-        v: { type: integer, const: 0 }
+        v: { type: integer, const: 1 }
         plan_id: { type: string, minLength: 1 }
         action_id: { type: string, minLength: 1 }
         tenant_id: { type: string, minLength: 1 }
@@ -231,7 +231,7 @@ components:
       additionalProperties: false
       required: [v, event_id, tenant_id, job_id, status, ts]
       properties:
-        v: { type: integer, const: 0 }
+        v: { type: integer, const: 1 }
         event_id: { type: string, minLength: 1 }
         tenant_id: { type: string, minLength: 1 }
         job_id: { type: string, minLength: 1 }
@@ -244,7 +244,7 @@ components:
       additionalProperties: false
       required: [v, event_id, tenant_id, job_id, ts]
       properties:
-        v: { type: integer, const: 0 }
+        v: { type: integer, const: 1 }
         event_id: { type: string, minLength: 1 }
         tenant_id: { type: string, minLength: 1 }
         job_id: { type: string, minLength: 1 }
@@ -256,7 +256,7 @@ components:
       additionalProperties: false
       required: [v, event_id, tenant_id, approval_id, status, ts]
       properties:
-        v: { type: integer, const: 0 }
+        v: { type: integer, const: 1 }
         event_id: { type: string, minLength: 1 }
         tenant_id: { type: string, minLength: 1 }
         approval_id: { type: string, minLength: 1 }

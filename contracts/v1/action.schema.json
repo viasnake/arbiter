@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/contracts/v0/action.schema.json",
+  "$id": "https://arbiter.dev/contracts/v1/action.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["type","action_id"],

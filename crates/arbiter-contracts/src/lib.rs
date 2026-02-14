@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const CONTRACT_VERSION: i32 = 0;
+pub const CONTRACT_VERSION: i32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,22 +187,22 @@ mod tests {
 
     #[test]
     fn rust_contract_samples_match_json_schemas() {
-        let event_validator = schema_validator("contracts/v0/event.schema.json");
+        let event_validator = schema_validator("contracts/v1/event.schema.json");
         let action_schema_text =
-            std::fs::read_to_string(repo_path("contracts/v0/action.schema.json")).unwrap();
+            std::fs::read_to_string(repo_path("contracts/v1/action.schema.json")).unwrap();
         let action_schema: Value = serde_json::from_str(&action_schema_text).unwrap();
         let mut plan_schema: Value = serde_json::from_str(
-            &std::fs::read_to_string(repo_path("contracts/v0/response_plan.schema.json")).unwrap(),
+            &std::fs::read_to_string(repo_path("contracts/v1/response_plan.schema.json")).unwrap(),
         )
         .unwrap();
         plan_schema["properties"]["actions"]["items"]["$ref"] =
             Value::String("#/$defs/action".to_string());
         plan_schema["$defs"] = json!({"action": action_schema});
         let plan_validator = jsonschema::validator_for(&plan_schema).unwrap();
-        let authz_validator = schema_validator("contracts/v0/authz_decision.schema.json");
-        let job_status_validator = schema_validator("contracts/v0/job_status_event.schema.json");
-        let job_cancel_validator = schema_validator("contracts/v0/job_cancel_request.schema.json");
-        let approval_validator = schema_validator("contracts/v0/approval_event.schema.json");
+        let authz_validator = schema_validator("contracts/v1/authz_decision.schema.json");
+        let job_status_validator = schema_validator("contracts/v1/job_status_event.schema.json");
+        let job_cancel_validator = schema_validator("contracts/v1/job_cancel_request.schema.json");
+        let approval_validator = schema_validator("contracts/v1/approval_event.schema.json");
 
         let event = Event {
             v: CONTRACT_VERSION,
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn action_type_enum_matches_action_schema() {
         let schema: Value = serde_json::from_str(
-            &std::fs::read_to_string(repo_path("contracts/v0/action.schema.json")).unwrap(),
+            &std::fs::read_to_string(repo_path("contracts/v1/action.schema.json")).unwrap(),
         )
         .unwrap();
         let schema_values = schema["properties"]["type"]["enum"]
