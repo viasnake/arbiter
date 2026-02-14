@@ -398,4 +398,10 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn test_fixture_uses_contract_version() {
+        let event = ev("fixture-v");
+        assert_eq!(event.v, CONTRACT_VERSION);
+    }
 }
