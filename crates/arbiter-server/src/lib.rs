@@ -364,7 +364,6 @@ impl AppState {
             room_state.pending_queue_size -= 1;
         }
         room_state.generating = room_state.pending_queue_size > 0;
-        room_state.last_send_at = Some(Utc::now());
         store
             .save_room(&pending_room_key, &room_state)
             .map_err(|e| e.to_string())?;
@@ -378,6 +377,12 @@ impl AppState {
             pending.reply_to.as_deref(),
         );
         validate_response_plan(&plan)?;
+        {
+            let mut store = self.store.lock().await;
+            store
+                .index_plan_actions(&pending.tenant_id, &plan)
+                .map_err(|e| e.to_string())?;
+        }
 
         self.audit
             .append(AuditRecord::new(
@@ -780,6 +785,107 @@ async fn action_results(
         ));
     }
 
+    let ingested_at = Utc::now();
+    let payload = serde_json::to_value(&input).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code":"validation_error","message": e.to_string()}})),
+        )
+    })?;
+    let payload_json = canonical_json_string(&payload);
+    let idempotency_key = action_result_idempotency_key(&input, &payload_json);
+    let context = {
+        let store = state.store.lock().await;
+        store
+            .get_action_context(&input.tenant_id, &input.action_id)
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": {"code":"validation_error","message": e}})),
+                )
+            })?
+    };
+
+    let mut plan_id = input.plan_id.clone();
+    let mut action_type = None;
+    let mut room_id = None;
+    if let Some(ctx) = context {
+        if plan_id.is_empty() {
+            plan_id = ctx.plan_id;
+        }
+        action_type = Some(ctx.action_type);
+        room_id = Some(ctx.room_id);
+    }
+
+    let record = ActionResultRecord {
+        tenant_id: input.tenant_id.clone(),
+        plan_id,
+        action_id: input.action_id.clone(),
+        status: input.status.clone(),
+        ts: input.ts.clone(),
+        provider_message_id: input.provider_message_id.clone(),
+        reason_code: input.reason_code.clone(),
+        error: input.error.as_ref().map(|v| serde_json::to_value(v).unwrap_or(Value::Null)),
+        idempotency_key,
+        payload_json,
+        ingested_at: ingested_at.to_rfc3339(),
+        action_type,
+        room_id,
+    };
+
+    let ingest = {
+        let mut store = state.store.lock().await;
+        store.ingest_action_result(record).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"code":"validation_error","message": e}})),
+            )
+        })?
+    };
+
+    let (stored, result_label) = match ingest {
+        ActionResultIngest::Inserted(v) => (v, "recorded"),
+        ActionResultIngest::Duplicate(v) => (v, "idempotency_hit"),
+        ActionResultIngest::Conflict(code) => {
+            state
+                .audit
+                .append(AuditRecord::new(
+                    &input.tenant_id,
+                    &input.action_id,
+                    "action_result",
+                    "rejected",
+                    &code,
+                    Some(input.plan_id),
+                ))
+                .await;
+            return Err((
+                StatusCode::CONFLICT,
+                Json(json!({"error": {"code":"conflict","message":code}})),
+            ));
+        }
+    };
+
+    if result_label == "recorded"
+        && stored.status == "succeeded"
+        && matches!(
+            stored.action_type.as_deref(),
+            Some("send_message") | Some("send_reply")
+        )
+    {
+        if let Some(ref room_id) = stored.room_id {
+            let room_key = room_key(&stored.tenant_id, room_id);
+            let mut store = state.store.lock().await;
+            let mut room = store.get_room(&room_key);
+            room.last_send_at = Some(ingested_at);
+            store.save_room(&room_key, &room).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": {"code":"validation_error","message": e}})),
+                )
+            })?;
+        }
+    }
+
     let reason = input
         .reason_code
         .as_deref()
@@ -796,9 +902,9 @@ async fn action_results(
             &input.tenant_id,
             &input.action_id,
             "action_result",
-            "recorded",
+            result_label,
             reason,
-            Some(input.plan_id),
+            Some(stored.plan_id),
         ))
         .await;
     Ok(StatusCode::NO_CONTENT)
@@ -812,6 +918,9 @@ struct MemoryStore {
     tenant_rate: HashMap<String, HashMap<i64, usize>>,
     job_states: HashMap<String, StateEntry>,
     approval_states: HashMap<String, StateEntry>,
+    action_index: HashMap<String, ActionContext>,
+    action_results_by_key: HashMap<String, ActionResultRecord>,
+    action_results_by_action: HashMap<String, ActionResultRecord>,
 }
 
 enum StoreBackend {
@@ -840,6 +949,36 @@ struct StateEntry {
     updated_at: String,
 }
 
+#[derive(Debug, Clone)]
+struct ActionContext {
+    plan_id: String,
+    action_type: String,
+    room_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct ActionResultRecord {
+    tenant_id: String,
+    plan_id: String,
+    action_id: String,
+    status: String,
+    ts: String,
+    provider_message_id: Option<String>,
+    reason_code: Option<String>,
+    error: Option<Value>,
+    idempotency_key: String,
+    payload_json: String,
+    ingested_at: String,
+    action_type: Option<String>,
+    room_id: Option<String>,
+}
+
+enum ActionResultIngest {
+    Inserted(ActionResultRecord),
+    Duplicate(ActionResultRecord),
+    Conflict(String),
+}
+
 #[derive(Serialize)]
 struct StateResponse {
     id: String,
@@ -861,9 +1000,34 @@ impl StoreBackend {
         match self {
             StoreBackend::Memory(store) => {
                 store.idempotency.insert(key, plan.clone());
+                Self::index_plan_actions_memory(store, plan);
                 Ok(())
             }
             StoreBackend::Sqlite(store) => store.save_idempotency(&key, plan),
+        }
+    }
+
+    fn index_plan_actions(&mut self, tenant_id: &str, plan: &ResponsePlan) -> Result<(), String> {
+        match self {
+            StoreBackend::Memory(store) => {
+                Self::index_plan_actions_memory(store, plan);
+                Ok(())
+            }
+            StoreBackend::Sqlite(store) => store.index_plan_actions(tenant_id, plan),
+        }
+    }
+
+    fn index_plan_actions_memory(store: &mut MemoryStore, plan: &ResponsePlan) {
+        for action in &plan.actions {
+            let key = action_index_key(&plan.tenant_id, &action.action_id);
+            store.action_index.insert(
+                key,
+                ActionContext {
+                    plan_id: plan.plan_id.clone(),
+                    action_type: action_name(action).to_string(),
+                    room_id: plan.room_id.clone(),
+                },
+            );
         }
     }
 
@@ -1004,6 +1168,64 @@ impl StoreBackend {
             StoreBackend::Sqlite(store) => store.get_approval_state(tenant_id, approval_id),
         }
     }
+
+    fn get_action_context(
+        &self,
+        tenant_id: &str,
+        action_id: &str,
+    ) -> Result<Option<ActionContext>, String> {
+        match self {
+            StoreBackend::Memory(store) => {
+                Ok(store
+                    .action_index
+                    .get(&action_index_key(tenant_id, action_id))
+                    .cloned())
+            }
+            StoreBackend::Sqlite(store) => store.get_action_context(tenant_id, action_id),
+        }
+    }
+
+    fn ingest_action_result(&mut self, mut record: ActionResultRecord) -> Result<ActionResultIngest, String> {
+        let action_key = action_index_key(&record.tenant_id, &record.action_id);
+        match self {
+            StoreBackend::Memory(store) => {
+                if let Some(existing) = store.action_results_by_key.get(&record.idempotency_key) {
+                    if existing.payload_json == record.payload_json {
+                        return Ok(ActionResultIngest::Duplicate(existing.clone()));
+                    }
+                    return Ok(ActionResultIngest::Conflict(
+                        "action_result_idempotency_conflict".to_string(),
+                    ));
+                }
+
+                if let Some(existing) = store.action_results_by_action.get(&action_key) {
+                    if existing.payload_json == record.payload_json {
+                        return Ok(ActionResultIngest::Duplicate(existing.clone()));
+                    }
+                    return Ok(ActionResultIngest::Conflict(
+                        "action_result_transition_rejected".to_string(),
+                    ));
+                }
+
+                store
+                    .action_results_by_key
+                    .insert(record.idempotency_key.clone(), record.clone());
+                store
+                    .action_results_by_action
+                    .insert(action_key, record.clone());
+                Ok(ActionResultIngest::Inserted(record))
+            }
+            StoreBackend::Sqlite(store) => {
+                if record.action_type.is_none() || record.room_id.is_none() {
+                    if let Some(ctx) = store.get_action_context(&record.tenant_id, &record.action_id)? {
+                        record.action_type = Some(ctx.action_type);
+                        record.room_id = Some(ctx.room_id);
+                    }
+                }
+                store.ingest_action_result(record)
+            }
+        }
+    }
 }
 
 impl SqliteStore {
@@ -1051,6 +1273,31 @@ impl SqliteStore {
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, approval_id)
             );
+            CREATE TABLE IF NOT EXISTS action_index (
+                tenant_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, action_id)
+            );
+            CREATE TABLE IF NOT EXISTS action_results (
+                tenant_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                provider_message_id TEXT,
+                reason_code TEXT,
+                error_json TEXT,
+                idempotency_key TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                ingested_at TEXT NOT NULL,
+                action_type TEXT,
+                room_id TEXT,
+                PRIMARY KEY (tenant_id, action_id),
+                UNIQUE (tenant_id, idempotency_key)
+            );
             ",
         )
         .map_err(|e| e.to_string())?;
@@ -1084,6 +1331,32 @@ impl SqliteStore {
                 params![key, json],
             )
             .map_err(|e| e.to_string())?;
+        self.index_plan_actions(&plan.tenant_id, plan)?;
+        Ok(())
+    }
+
+    fn index_plan_actions(&mut self, tenant_id: &str, plan: &ResponsePlan) -> Result<(), String> {
+        for action in &plan.actions {
+            self.conn
+                .execute(
+                    "
+                    INSERT INTO action_index(tenant_id, action_id, plan_id, action_type, room_id)
+                    VALUES (?1, ?2, ?3, ?4, ?5)
+                    ON CONFLICT(tenant_id, action_id) DO UPDATE SET
+                        plan_id=excluded.plan_id,
+                        action_type=excluded.action_type,
+                        room_id=excluded.room_id
+                    ",
+                    params![
+                        tenant_id,
+                        action.action_id,
+                        plan.plan_id,
+                        action_name(action),
+                        plan.room_id
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -1312,6 +1585,157 @@ impl SqliteStore {
             )
             .optional()
             .map_err(|e| e.to_string())
+    }
+
+    fn get_action_context(
+        &self,
+        tenant_id: &str,
+        action_id: &str,
+    ) -> Result<Option<ActionContext>, String> {
+        self.conn
+            .query_row(
+                "SELECT plan_id, action_type, room_id FROM action_index WHERE tenant_id = ?1 AND action_id = ?2",
+                params![tenant_id, action_id],
+                |row| {
+                    Ok(ActionContext {
+                        plan_id: row.get(0)?,
+                        action_type: row.get(1)?,
+                        room_id: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    fn get_action_result_by_idempotency(
+        &self,
+        tenant_id: &str,
+        idempotency_key: &str,
+    ) -> Result<Option<ActionResultRecord>, String> {
+        self.conn
+            .query_row(
+                "
+                SELECT tenant_id, plan_id, action_id, status, ts, provider_message_id, reason_code,
+                       error_json, idempotency_key, payload_json, ingested_at, action_type, room_id
+                FROM action_results
+                WHERE tenant_id = ?1 AND idempotency_key = ?2
+                ",
+                params![tenant_id, idempotency_key],
+                |row| {
+                    let error_json: Option<String> = row.get(7)?;
+                    Ok(ActionResultRecord {
+                        tenant_id: row.get(0)?,
+                        plan_id: row.get(1)?,
+                        action_id: row.get(2)?,
+                        status: row.get(3)?,
+                        ts: row.get(4)?,
+                        provider_message_id: row.get(5)?,
+                        reason_code: row.get(6)?,
+                        error: error_json
+                            .as_deref()
+                            .and_then(|v| serde_json::from_str::<Value>(v).ok()),
+                        idempotency_key: row.get(8)?,
+                        payload_json: row.get(9)?,
+                        ingested_at: row.get(10)?,
+                        action_type: row.get(11)?,
+                        room_id: row.get(12)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    fn get_action_result_by_action(
+        &self,
+        tenant_id: &str,
+        action_id: &str,
+    ) -> Result<Option<ActionResultRecord>, String> {
+        self.conn
+            .query_row(
+                "
+                SELECT tenant_id, plan_id, action_id, status, ts, provider_message_id, reason_code,
+                       error_json, idempotency_key, payload_json, ingested_at, action_type, room_id
+                FROM action_results
+                WHERE tenant_id = ?1 AND action_id = ?2
+                ",
+                params![tenant_id, action_id],
+                |row| {
+                    let error_json: Option<String> = row.get(7)?;
+                    Ok(ActionResultRecord {
+                        tenant_id: row.get(0)?,
+                        plan_id: row.get(1)?,
+                        action_id: row.get(2)?,
+                        status: row.get(3)?,
+                        ts: row.get(4)?,
+                        provider_message_id: row.get(5)?,
+                        reason_code: row.get(6)?,
+                        error: error_json
+                            .as_deref()
+                            .and_then(|v| serde_json::from_str::<Value>(v).ok()),
+                        idempotency_key: row.get(8)?,
+                        payload_json: row.get(9)?,
+                        ingested_at: row.get(10)?,
+                        action_type: row.get(11)?,
+                        room_id: row.get(12)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    fn insert_action_result(&mut self, record: &ActionResultRecord) -> Result<(), String> {
+        self.conn
+            .execute(
+                "
+                INSERT INTO action_results(
+                    tenant_id, action_id, plan_id, status, ts, provider_message_id, reason_code,
+                    error_json, idempotency_key, payload_json, ingested_at, action_type, room_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                ",
+                params![
+                    record.tenant_id,
+                    record.action_id,
+                    record.plan_id,
+                    record.status,
+                    record.ts,
+                    record.provider_message_id,
+                    record.reason_code,
+                    record.error.as_ref().map(|v| v.to_string()),
+                    record.idempotency_key,
+                    record.payload_json,
+                    record.ingested_at,
+                    record.action_type,
+                    record.room_id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn ingest_action_result(&mut self, record: ActionResultRecord) -> Result<ActionResultIngest, String> {
+        if let Some(existing) = self.get_action_result_by_idempotency(&record.tenant_id, &record.idempotency_key)? {
+            if existing.payload_json == record.payload_json {
+                return Ok(ActionResultIngest::Duplicate(existing));
+            }
+            return Ok(ActionResultIngest::Conflict(
+                "action_result_idempotency_conflict".to_string(),
+            ));
+        }
+
+        if let Some(existing) = self.get_action_result_by_action(&record.tenant_id, &record.action_id)? {
+            if existing.payload_json == record.payload_json {
+                return Ok(ActionResultIngest::Duplicate(existing));
+            }
+            return Ok(ActionResultIngest::Conflict(
+                "action_result_transition_rejected".to_string(),
+            ));
+        }
+
+        self.insert_action_result(&record)?;
+        Ok(ActionResultIngest::Inserted(record))
     }
 }
 
@@ -1883,6 +2307,55 @@ fn room_key(tenant_id: &str, room_id: &str) -> String {
 
 fn pending_key(tenant_id: &str, action_id: &str) -> String {
     format!("{tenant_id}:{action_id}")
+}
+
+fn action_index_key(tenant_id: &str, action_id: &str) -> String {
+    format!("{tenant_id}:{action_id}")
+}
+
+fn action_result_idempotency_key(input: &ActionResult, payload_json: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.tenant_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(input.action_id.as_bytes());
+    hasher.update(b":");
+    if let Some(provider_message_id) = input
+        .provider_message_id
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        hasher.update(provider_message_id.as_bytes());
+    } else {
+        hasher.update(payload_json.as_bytes());
+    }
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn canonical_json_string(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(v) => v.to_string(),
+        Value::Number(v) => v.to_string(),
+        Value::String(v) => serde_json::to_string(v).unwrap_or_else(|_| "\"\"".to_string()),
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(canonical_json_string).collect();
+            format!("[{}]", parts.join(","))
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_unstable();
+            let parts: Vec<String> = keys
+                .into_iter()
+                .map(|k| {
+                    let key = serde_json::to_string(k).unwrap_or_else(|_| "\"\"".to_string());
+                    let val = canonical_json_string(&map[k]);
+                    format!("{key}:{val}")
+                })
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+    }
 }
 
 #[cfg(test)]

@@ -241,6 +241,72 @@ async fn action_results_rejects_invalid_status() {
 }
 
 #[tokio::test]
+async fn action_results_is_idempotent_for_same_payload() {
+    let app = build_app(test_config()).await.unwrap();
+    let payload = json!({
+        "v": 1,
+        "plan_id": "plan_1",
+        "action_id": "act_1",
+        "tenant_id": "tenant-a",
+        "status": "succeeded",
+        "ts": "2026-02-14T00:00:00Z",
+        "provider_message_id": "msg-1"
+    });
+
+    for _ in 0..2 {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/action-results")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+}
+
+#[tokio::test]
+async fn action_results_rejects_conflicting_transition() {
+    let app = build_app(test_config()).await.unwrap();
+    let succeeded = json!({
+        "v": 1,
+        "plan_id": "plan_1",
+        "action_id": "act-transition-1",
+        "tenant_id": "tenant-a",
+        "status": "succeeded",
+        "ts": "2026-02-14T00:00:00Z",
+        "provider_message_id": "msg-1"
+    });
+    let failed = json!({
+        "v": 1,
+        "plan_id": "plan_1",
+        "action_id": "act-transition-1",
+        "tenant_id": "tenant-a",
+        "status": "failed",
+        "ts": "2026-02-14T00:00:02Z",
+        "provider_message_id": "msg-2"
+    });
+
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/v1/action-results")
+        .header("content-type", "application/json")
+        .body(Body::from(succeeded.to_string()))
+        .unwrap();
+    let res1 = app.clone().oneshot(req1).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::NO_CONTENT);
+
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/v1/action-results")
+        .header("content-type", "application/json")
+        .body(Body::from(failed.to_string()))
+        .unwrap();
+    let res2 = app.oneshot(req2).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn idempotency_same_event_same_plan() {
     let app = build_app(test_config()).await.unwrap();
     let event = sample_event("evt-1");
@@ -455,6 +521,28 @@ async fn cooldown_uses_server_time_even_when_event_ts_is_future_or_past() {
         .unwrap();
     let gen_res = app.clone().oneshot(gen_req).await.unwrap();
     assert_eq!(gen_res.status(), StatusCode::OK);
+    let gen_body = axum::body::to_bytes(gen_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let send_plan: Value = serde_json::from_slice(&gen_body).unwrap();
+
+    let action_result = json!({
+        "v": 1,
+        "plan_id": send_plan["plan_id"],
+        "action_id": send_plan["actions"][0]["action_id"],
+        "tenant_id": "tenant-a",
+        "status": "succeeded",
+        "ts": "2026-02-14T00:00:01Z",
+        "provider_message_id": "provider-msg-cooldown"
+    });
+    let result_req = Request::builder()
+        .method("POST")
+        .uri("/v1/action-results")
+        .header("content-type", "application/json")
+        .body(Body::from(action_result.to_string()))
+        .unwrap();
+    let result_res = app.clone().oneshot(result_req).await.unwrap();
+    assert_eq!(result_res.status(), StatusCode::NO_CONTENT);
 
     for (event_id, ts) in [
         ("evt-cooldown-future", "2099-01-01T00:00:00Z"),
@@ -590,8 +678,32 @@ async fn sqlite_store_persists_room_state_across_app_restart() {
         .header("content-type", "application/json")
         .body(Body::from(generation.to_string()))
         .unwrap();
-    let gen_res = app1.oneshot(gen_req).await.unwrap();
+    let gen_res = app1.clone().oneshot(gen_req).await.unwrap();
     assert_eq!(gen_res.status(), StatusCode::OK);
+    let gen_body = axum::body::to_bytes(gen_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let send_plan: Value = serde_json::from_slice(&gen_body).unwrap();
+
+    let result_req = Request::builder()
+        .method("POST")
+        .uri("/v1/action-results")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "v": 1,
+                "plan_id": send_plan["plan_id"],
+                "action_id": send_plan["actions"][0]["action_id"],
+                "tenant_id": "tenant-a",
+                "status": "succeeded",
+                "ts": "2026-02-14T00:00:01Z",
+                "provider_message_id": "provider-msg-room-state"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let result_res = app1.oneshot(result_req).await.unwrap();
+    assert_eq!(result_res.status(), StatusCode::NO_CONTENT);
 
     let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
     let second_event = sample_event("evt-room-state-2");
