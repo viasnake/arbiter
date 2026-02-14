@@ -348,7 +348,7 @@ mod tests {
 
     fn ev(id: &str) -> Event {
         Event {
-            v: 0,
+            v: CONTRACT_VERSION,
             event_id: id.to_string(),
             tenant_id: "t1".to_string(),
             source: "s".to_string(),
