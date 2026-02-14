@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/contracts/v1/ops.event.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tenant_id",
+    "event_id",
+    "occurred_at",
+    "source",
+    "kind",
+    "subject",
+    "summary",
+    "payload_ref"
+  ],
+  "properties": {
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "event_id": { "type": "string", "minLength": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "source": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "subject": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "payload_ref": { "type": "string", "minLength": 1 },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "default": {}
+    },
+    "actor": {
+      "default": null
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "default": {}
+    }
+  }
+}

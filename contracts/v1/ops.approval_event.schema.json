@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/contracts/v1/ops.approval_event.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tenant_id", "approval_id", "status", "decided_at", "decided_by"],
+  "properties": {
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "approval_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["requested", "approved", "denied", "canceled"] },
+    "decided_at": { "type": "string", "format": "date-time" },
+    "decided_by": { "type": "string", "minLength": 1 },
+    "reason": { "type": "string" }
+  }
+}

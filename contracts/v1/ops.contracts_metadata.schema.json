@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/contracts/v1/ops.contracts_metadata.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "openapi_sha256",
+    "contracts_set_sha256",
+    "generated_at",
+    "schemas",
+    "governance"
+  ],
+  "properties": {
+    "api_version": { "type": "string", "const": "1.2.0" },
+    "openapi_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "contracts_set_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "schemas": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_action_types", "allowed_providers", "approval_policy"],
+      "properties": {
+        "allowed_action_types": {
+          "type": "array",
+          "items": { "enum": ["notify", "write_external", "start_job"] }
+        },
+        "allowed_providers": { "type": "array", "items": { "type": "string" } },
+        "approval_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required_for_types", "defaults"],
+          "properties": {
+            "required_for_types": {
+              "type": "array",
+              "items": { "enum": ["notify", "write_external", "start_job"] }
+            },
+            "defaults": {
+              "type": "object",
+              "additionalProperties": { "type": "boolean" }
+            }
+          }
+        },
+        "max_payload_hints": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "error_codes": { "type": "string" }
+      }
+    }
+  }
+}

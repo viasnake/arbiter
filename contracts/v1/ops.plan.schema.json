@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/contracts/v1/ops.plan.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["plan_id", "tenant_id", "event_id", "actions", "decision"],
+  "properties": {
+    "plan_id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "event_id": { "type": "string", "minLength": 1 },
+    "actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "approval": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required"],
+          "properties": {
+            "required": { "type": "boolean" },
+            "approval_id": { "type": "string", "minLength": 1 }
+          }
+        },
+        { "type": "null" }
+      ],
+      "default": null
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_version", "evaluation_time"],
+      "properties": {
+        "policy_version": { "type": "string", "minLength": 1 },
+        "evaluation_time": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_id",
+        "type",
+        "provider",
+        "operation",
+        "params",
+        "risk",
+        "requires_approval",
+        "idempotency_key"
+      ],
+      "properties": {
+        "action_id": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["notify", "write_external", "start_job"] },
+        "provider": { "type": "string", "minLength": 1 },
+        "operation": { "type": "string", "minLength": 1 },
+        "params": { "type": "object", "additionalProperties": true },
+        "risk": { "enum": ["low", "medium", "high"] },
+        "requires_approval": { "type": "boolean" },
+        "idempotency_key": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

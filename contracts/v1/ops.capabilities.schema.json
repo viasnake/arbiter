@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/contracts/v1/ops.capabilities.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "component",
+    "component_version",
+    "contracts_set_sha256_seen",
+    "capabilities_sha256",
+    "capabilities"
+  ],
+  "properties": {
+    "component": { "enum": ["connector", "executor"] },
+    "component_version": { "type": "string", "minLength": 1 },
+    "contracts_set_sha256_seen": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "capabilities_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sources", "providers", "action_types", "operations"],
+      "properties": {
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "providers": { "type": "array", "items": { "type": "string" } },
+        "action_types": {
+          "type": "array",
+          "items": { "enum": ["notify", "write_external", "start_job"] }
+        },
+        "operations": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
