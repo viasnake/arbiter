@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/contracts/v1/ops.contracts_metadata.schema.json",
+  "$id": "https://raw.githubusercontent.com/viasnake/arbiter/v1.2.1/contracts/v1/ops.contracts_metadata.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
     "governance"
   ],
   "properties": {
-    "api_version": { "type": "string", "const": "1.2.0" },
+    "api_version": { "type": "string", "const": "1.2.1" },
     "openapi_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "contracts_set_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "generated_at": { "type": "string", "format": "date-time" },

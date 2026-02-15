@@ -20,7 +20,7 @@ It unifies contracts, policy visibility, deterministic planning, idempotency saf
 - Not a queue, scheduler, or side-effect dispatcher.
 - Not a provider-specific integration bundle.
 
-## API surface (v1.2.0)
+## API surface (v1.2.1)
 
 - `GET /v1/healthz`
 - `GET /v1/contracts`
@@ -100,7 +100,7 @@ Plan:
     "required": false
   },
   "decision": {
-    "policy_version": "policy:v1.2.0",
+    "policy_version": "policy:v1.2.1",
     "evaluation_time": "2026-02-14T00:00:00Z"
   }
 }
@@ -131,10 +131,10 @@ mise exec -- cargo run -- serve --config ./config/example-config.yaml
 ## Run with Docker (GHCR)
 
 ```bash
-docker pull ghcr.io/viasnake/arbiter:v1.2.0
+docker pull ghcr.io/viasnake/arbiter:v1.2.1
 docker run --rm -p 8080:8080 \
   -v "$(pwd)/config/example-config.yaml:/app/config/config.yaml:ro" \
-  ghcr.io/viasnake/arbiter:v1.2.0 \
+  ghcr.io/viasnake/arbiter:v1.2.1 \
   serve --config /app/config/config.yaml
 ```
 
@@ -143,7 +143,7 @@ Release tags publish `ghcr.io/viasnake/arbiter:vX.Y.Z` only (no `latest`).
 ## Schema URL policy
 
 - JSON schema `$id` values are pinned to release-tagged raw GitHub URLs.
-- Example: `https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/contracts/v1/ops.event.schema.json`
+- Example: `https://raw.githubusercontent.com/viasnake/arbiter/v1.2.1/contracts/v1/ops.event.schema.json`
 - On every release, `$id` values must be updated to the new tag and pass drift-guard tests.
 
 ## Verify
@@ -173,4 +173,4 @@ mise run ci
 - `docs/spec/json-fingerprint.md`
 - `docs/spec/governance-view.md`
 - `docs/spec/errors.md`
-- `docs/releases/v1.2.0.md`
+- `docs/releases/v1.2.1.md`

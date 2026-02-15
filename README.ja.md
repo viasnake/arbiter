@@ -18,7 +18,7 @@ Arbiter は AI アプリケーション向けの provider-agnostic なガバナ�
 - 副作用の実行
 - プロバイダ固有分岐の実装
 
-## API (v1.2.0)
+## API (v1.2.1)
 
 - `GET /v1/healthz`
 - `GET /v1/contracts`
@@ -36,10 +36,10 @@ OpenAPI: `openapi/v1.yaml`
 ## Docker で実行 (GHCR)
 
 ```bash
-docker pull ghcr.io/viasnake/arbiter:v1.2.0
+docker pull ghcr.io/viasnake/arbiter:v1.2.1
 docker run --rm -p 8080:8080 \
   -v "$(pwd)/config/example-config.yaml:/app/config/config.yaml:ro" \
-  ghcr.io/viasnake/arbiter:v1.2.0 \
+  ghcr.io/viasnake/arbiter:v1.2.1 \
   serve --config /app/config/config.yaml
 ```
 
@@ -48,7 +48,7 @@ docker run --rm -p 8080:8080 \
 ## Schema URL 方針
 
 - JSON schema の `$id` はリリースタグ固定の raw GitHub URL を使用します。
-- 例: `https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/contracts/v1/ops.event.schema.json`
+- 例: `https://raw.githubusercontent.com/viasnake/arbiter/v1.2.1/contracts/v1/ops.event.schema.json`
 - 新しいリリースでは `$id` を新タグへ更新し、drift guard テストで検証します。
 
 ## 検証
@@ -78,4 +78,4 @@ mise run ci
 - `docs/spec/json-fingerprint.md`
 - `docs/spec/governance-view.md`
 - `docs/spec/errors.md`
-- `docs/releases/v1.2.0.md`
+- `docs/releases/v1.2.1.md`

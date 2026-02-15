@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.1
+
+### Added
+
+- Added release automation for coordinated version bump and consistency checks (`scripts/version.py`, `make version-bump`).
+- Added drift guard coverage for schema `$id` references pinned to release-tagged raw URLs.
+
+### Changed
+
+- Enforced tag/source version consistency in release CI before packaging and publishing artifacts.
+- Documented versioned GHCR image policy and release bump workflow in README files.
+
 ## 1.2.0
 
 ### Breaking

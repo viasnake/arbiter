@@ -11,7 +11,7 @@ governance:
     - "chat"
 
 policy:
-  version: "policy:v1.2.0"
+  version: "policy:v1.2.1"
   require_approval_for_write_external: true
   require_approval_for_notify: false
   require_approval_for_start_job: false

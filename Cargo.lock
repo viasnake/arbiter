@@ -42,7 +42,7 @@ dependencies = [
 
 [[package]]
 name = "arbiter"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "arbiter-config",
  "arbiter-server",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "arbiter-config"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "jsonschema",
  "serde",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "arbiter-contracts"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "chrono",
  "jsonschema",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "arbiter-kernel"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "arbiter-contracts",
  "chrono",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "arbiter-server"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "arbiter-config",
  "arbiter-contracts",

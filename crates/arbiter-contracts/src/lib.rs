@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub const API_VERSION: &str = "1.2.0";
+pub const API_VERSION: &str = "1.2.1";
 
 #[derive(Debug, Clone)]
 pub struct ContractSchemaManifest {

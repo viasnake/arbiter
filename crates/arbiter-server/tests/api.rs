@@ -1,4 +1,5 @@
 use arbiter_config::{Audit, Config, Governance, Policy, Server, Store};
+use arbiter_contracts::API_VERSION;
 use arbiter_server::{build_app, verify_audit_chain, verify_audit_chain_with_mirror};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -101,7 +102,7 @@ async fn contracts_endpoint_includes_governance_view() {
         .await
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["api_version"], "1.2.0");
+    assert_eq!(payload["api_version"], API_VERSION);
     assert!(payload["openapi_sha256"].as_str().unwrap().len() == 64);
     assert!(payload["contracts_set_sha256"].as_str().unwrap().len() == 64);
     assert_eq!(

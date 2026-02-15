@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/config/config.schema.json",
-  "title": "Arbiter Configuration Schema v1.2.0",
+  "$id": "https://raw.githubusercontent.com/viasnake/arbiter/v1.2.1/config/config.schema.json",
+  "title": "Arbiter Configuration Schema v1.2.1",
   "type": "object",
   "additionalProperties": false,
   "required": ["server", "store", "governance", "policy", "audit"],
