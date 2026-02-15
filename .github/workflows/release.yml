@@ -62,6 +62,9 @@ jobs:
             exit 1
           fi
 
+      - name: Version consistency check
+        run: mise run version-check
+
       - name: Format check
         run: mise run fmt-check
 

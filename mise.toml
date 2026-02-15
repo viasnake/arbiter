@@ -25,10 +25,18 @@ run = "cargo test -p arbiter-contracts"
 description = "Guard OpenAPI refs and schema compilation drift"
 run = "cargo test -p arbiter-contracts"
 
+[tasks.version-check]
+description = "Verify release version consistency across source files"
+run = "python3 scripts/version.py check"
+
+[tasks.version-bump]
+description = "Update release version across source files (set VERSION=x.y.z)"
+run = "python3 scripts/version.py bump ${VERSION:?set VERSION=x.y.z}"
+
 [tasks.build]
 description = "Build release binary"
 run = "cargo build --release"
 
 [tasks.ci]
 description = "Run full local CI pipeline"
-depends = ["fmt-check", "lint", "drift-guard", "contracts-verify", "test", "build"]
+depends = ["version-check", "fmt-check", "lint", "drift-guard", "contracts-verify", "test", "build"]

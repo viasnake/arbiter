@@ -20,6 +20,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Version consistency check
+        run: mise run version-check
+
       - name: Format check
         run: mise run fmt-check
 
