@@ -128,6 +128,24 @@ mise install
 mise exec -- cargo run -- serve --config ./config/example-config.yaml
 ```
 
+## Run with Docker (GHCR)
+
+```bash
+docker pull ghcr.io/viasnake/arbiter:v1.2.0
+docker run --rm -p 8080:8080 \
+  -v "$(pwd)/config/example-config.yaml:/app/config/config.yaml:ro" \
+  ghcr.io/viasnake/arbiter:v1.2.0 \
+  serve --config /app/config/config.yaml
+```
+
+Release tags publish `ghcr.io/viasnake/arbiter:vX.Y.Z` only (no `latest`).
+
+## Schema URL policy
+
+- JSON schema `$id` values are pinned to release-tagged raw GitHub URLs.
+- Example: `https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/contracts/v1/ops.event.schema.json`
+- On every release, `$id` values must be updated to the new tag and pass drift-guard tests.
+
 ## Verify
 
 ```bash

@@ -33,6 +33,24 @@ OpenAPI: `openapi/v1.yaml`
 - `plan.decision.evaluation_time` は `event.occurred_at` 由来
 - wall-clock 時刻は plan 決定に使わない
 
+## Docker で実行 (GHCR)
+
+```bash
+docker pull ghcr.io/viasnake/arbiter:v1.2.0
+docker run --rm -p 8080:8080 \
+  -v "$(pwd)/config/example-config.yaml:/app/config/config.yaml:ro" \
+  ghcr.io/viasnake/arbiter:v1.2.0 \
+  serve --config /app/config/config.yaml
+```
+
+リリース時のコンテナタグは `ghcr.io/viasnake/arbiter:vX.Y.Z` のみです（`latest` は付与しません）。
+
+## Schema URL 方針
+
+- JSON schema の `$id` はリリースタグ固定の raw GitHub URL を使用します。
+- 例: `https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/contracts/v1/ops.event.schema.json`
+- 新しいリリースでは `$id` を新タグへ更新し、drift guard テストで検証します。
+
 ## ドキュメント
 
 - `docs/spec/envelopes.md`
