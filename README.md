@@ -149,12 +149,22 @@ Release tags publish `ghcr.io/viasnake/arbiter:vX.Y.Z` only (no `latest`).
 ## Verify
 
 ```bash
+mise run version-check
 mise run fmt-check
 mise run lint
 mise run contracts-verify
 mise run test
 mise run build
 ```
+
+## Release version bump
+
+```bash
+make version-bump VERSION=1.2.1
+mise run ci
+```
+
+`version-bump` updates Cargo/OpenAPI/API_VERSION/schema `$id`/README examples together.
 
 ## Docs
 

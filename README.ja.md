@@ -51,6 +51,26 @@ docker run --rm -p 8080:8080 \
 - 例: `https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/contracts/v1/ops.event.schema.json`
 - 新しいリリースでは `$id` を新タグへ更新し、drift guard テストで検証します。
 
+## 検証
+
+```bash
+mise run version-check
+mise run fmt-check
+mise run lint
+mise run contracts-verify
+mise run test
+mise run build
+```
+
+## リリース時のバージョン更新
+
+```bash
+make version-bump VERSION=1.2.1
+mise run ci
+```
+
+`version-bump` は Cargo/OpenAPI/API_VERSION/schema `$id`/README の例示バージョンをまとめて更新します。
+
 ## ドキュメント
 
 - `docs/spec/envelopes.md`
