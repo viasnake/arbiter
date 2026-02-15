@@ -247,6 +247,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn schema_ids_match_tagged_raw_github_urls() {
+        let repo_root = repo_path("");
+        let contracts_dir = repo_path("contracts/v1");
+
+        let mut schema_paths: Vec<PathBuf> = std::fs::read_dir(&contracts_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|v| v.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.ends_with(".schema.json"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        schema_paths.push(repo_path("config/config.schema.json"));
+        schema_paths.sort();
+
+        for path in schema_paths {
+            let rel = path
+                .strip_prefix(&repo_root)
+                .unwrap_or_else(|e| {
+                    panic!("failed to strip repo root from {}: {e}", path.display())
+                })
+                .to_string_lossy()
+                .replace('\\', "/");
+            let expected_id = format!(
+                "https://raw.githubusercontent.com/viasnake/arbiter/v{}/{rel}",
+                super::API_VERSION
+            );
+
+            let text = std::fs::read_to_string(&path).unwrap();
+            let schema: Value = serde_json::from_str(&text).unwrap();
+            let id = schema
+                .get("$id")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("missing $id in {}", path.display()));
+
+            assert_eq!(id, expected_id, "unexpected $id for {}", path.display());
+        }
+    }
+
     fn repo_path(relative: &str) -> PathBuf {
         let mut base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         base.push("../..");

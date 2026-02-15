@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/contracts/v1/ops.contracts_metadata.schema.json",
+  "$id": "https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/contracts/v1/ops.contracts_metadata.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": [

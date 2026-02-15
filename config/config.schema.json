@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arbiter.dev/config/v1.2.0/config.schema.json",
+  "$id": "https://raw.githubusercontent.com/viasnake/arbiter/v1.2.0/config/config.schema.json",
   "title": "Arbiter Configuration Schema v1.2.0",
   "type": "object",
   "additionalProperties": false,
