@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -78,6 +79,25 @@ jobs:
 
       - name: Build release
         run: mise run build
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ghcr.io/viasnake/arbiter:${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/viasnake/arbiter
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.title=arbiter
 
       - name: Package release artifact
         shell: bash
