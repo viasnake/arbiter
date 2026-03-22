@@ -35,120 +35,178 @@ pub fn contracts_manifest_v1() -> ContractsManifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ActionType {
-    Notify,
-    WriteExternal,
-    StartJob,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RiskLevel {
-    Low,
-    Medium,
-    High,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EventEnvelope {
-    pub tenant_id: String,
-    pub event_id: String,
-    pub occurred_at: String,
-    pub source: String,
-    pub kind: String,
-    pub subject: String,
-    pub summary: String,
-    pub payload_ref: String,
-    #[serde(default)]
-    pub labels: BTreeMap<String, String>,
-    #[serde(default)]
-    pub actor: Option<Value>,
-    #[serde(default)]
-    pub context: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ActionEnvelope {
-    pub action_id: String,
-    #[serde(rename = "type")]
-    pub action_type: ActionType,
-    pub provider: String,
-    pub operation: String,
-    pub params: Value,
-    pub risk: RiskLevel,
-    pub requires_approval: bool,
-    pub idempotency_key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanApproval {
-    pub required: bool,
-    #[serde(default)]
-    pub approval_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanDecision {
-    pub policy_version: String,
-    pub evaluation_time: String,
-    #[serde(default)]
-    pub notes: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanEnvelope {
-    pub plan_id: String,
-    pub tenant_id: String,
-    pub event_id: String,
-    pub actions: Vec<ActionEnvelope>,
-    #[serde(default)]
-    pub approval: Option<PlanApproval>,
-    pub decision: PlanDecision,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ApprovalStatus {
-    Requested,
-    Approved,
-    Denied,
-    Canceled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ApprovalEvent {
-    pub tenant_id: String,
-    pub approval_id: String,
-    pub status: ApprovalStatus,
-    pub decided_at: String,
-    pub decided_by: String,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ActionResultStatus {
-    Succeeded,
+pub enum RunStatus {
+    Queued,
+    Dispatched,
+    Running,
+    WaitingForApproval,
+    WaitingForExecutor,
+    Completed,
     Failed,
-    Skipped,
+    Cancelled,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepStatus {
+    Pending,
+    IntentReceived,
+    DecisionMade,
+    Permitted,
+    InProgress,
+    WaitingForApproval,
+    Completed,
+    Failed,
+    Denied,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepType {
+    LlmCall,
+    ToolCall,
+    ApprovalWait,
+    EmitOutput,
+    HumanMessage,
+    Error,
+    Cancel,
+    Resume,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionEffect {
+    Allow,
+    Deny,
+    RequireApproval,
+    Reroute,
+    Suspend,
+    Downgrade,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ActionResult {
-    pub tenant_id: String,
-    pub plan_id: String,
-    pub action_id: String,
-    pub status: ActionResultStatus,
-    pub occurred_at: String,
-    pub evidence: Value,
+pub struct OperationRequest {
+    pub request_id: String,
+    pub source: String,
+    pub requester: String,
+    pub target_agent: String,
+    pub objective: String,
+    #[serde(default)]
+    pub payload: Value,
+    #[serde(default)]
+    pub environment_hint: Option<String>,
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+    #[serde(default)]
+    pub urgency: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Run {
+    pub run_id: String,
+    pub request_id: String,
+    pub agent_id: String,
+    pub executor_id: String,
+    pub status: RunStatus,
+    pub created_at: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    pub policy_snapshot: Value,
+    pub budget_snapshot: Value,
+    pub lease_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepIntent {
+    pub intent_id: String,
+    pub run_id: String,
+    pub step_type: StepType,
+    pub proposed_action: String,
+    pub risk_level: String,
+    #[serde(default)]
+    pub payload: Value,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub justification: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Decision {
+    pub decision_id: String,
+    pub effect: DecisionEffect,
+    pub reason: String,
+    #[serde(default)]
+    pub applied_policies: Vec<String>,
+    #[serde(default)]
+    pub constraints: Value,
+    #[serde(default)]
+    pub required_approvers: Vec<String>,
+    #[serde(default)]
+    pub executor_scope: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionPermit {
+    pub permit_id: String,
+    pub run_id: String,
+    pub step_id: String,
+    pub executor_id: String,
+    pub allowed_action: String,
+    pub constraints: Value,
+    pub issued_at: String,
+    pub expires_at: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalRequest {
+    pub approval_id: String,
+    pub run_id: String,
+    pub step_id: String,
+    pub requested_action: String,
+    pub approver_set: Vec<String>,
+    pub status: String,
+    pub reason: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Step {
+    pub step_id: String,
+    pub run_id: String,
+    pub step_type: StepType,
+    pub status: StepStatus,
+    pub intent: StepIntent,
+    pub decision: Decision,
+    #[serde(default)]
+    pub permit: Option<ExecutionPermit>,
+    #[serde(default)]
+    pub approval_request: Option<ApprovalRequest>,
+    pub started_at: String,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunEnvelope {
+    pub run: Run,
+    #[serde(default)]
+    pub steps: Vec<Step>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,32 +226,12 @@ pub struct ErrorResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ApprovalPolicySummary {
-    pub required_for_types: Vec<ActionType>,
-    pub defaults: BTreeMap<String, bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GovernanceView {
-    pub allowed_action_types: Vec<ActionType>,
-    pub allowed_providers: Vec<String>,
-    pub approval_policy: ApprovalPolicySummary,
-    #[serde(default)]
-    pub max_payload_hints: Option<BTreeMap<String, u64>>,
-    #[serde(default)]
-    pub error_codes: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ContractsMetadata {
     pub api_version: String,
     pub openapi_sha256: String,
     pub contracts_set_sha256: String,
     pub generated_at: String,
     pub schemas: BTreeMap<String, String>,
-    pub governance: GovernanceView,
 }
 
 #[cfg(test)]
