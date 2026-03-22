@@ -1,6 +1,6 @@
 use arbiter_config::{Audit, Config, Governance, Policy, Server, Store};
-use arbiter_contracts::API_VERSION;
-use arbiter_server::{build_app, verify_audit_chain, verify_audit_chain_with_mirror};
+use arbiter_contracts::{DecisionEffect, StepStatus, API_VERSION};
+use arbiter_server::build_app;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
@@ -21,7 +21,7 @@ fn test_config() -> Config {
             sqlite_path: None,
         },
         governance: Governance {
-            allowed_providers: vec!["generic".to_string(), "email".to_string()],
+            allowed_providers: vec!["generic".to_string()],
         },
         policy: Policy {
             version: "policy:test".to_string(),
@@ -39,32 +39,17 @@ fn test_config() -> Config {
     }
 }
 
-fn test_config_sqlite(db_path: &str) -> Config {
-    let mut cfg = test_config();
-    cfg.store.kind = "sqlite".to_string();
-    cfg.store.sqlite_path = Some(db_path.to_string());
-    cfg
-}
-
-fn sample_event(event_id: &str) -> Value {
+fn sample_request(request_id: &str) -> Value {
     json!({
-        "tenant_id": "tenant-a",
-        "event_id": event_id,
-        "occurred_at": "2026-02-14T00:00:00Z",
-        "source": "github",
-        "kind": "webhook_received",
-        "subject": "issue/1",
-        "summary": "new issue arrived",
-        "payload_ref": "s3://bucket/raw/1.json",
-        "labels": {
-            "provider": "generic",
-            "action_type": "notify",
-            "risk": "low",
-            "operation": "emit_notification"
-        },
-        "context": {
-            "repo": "arbiter"
-        }
+        "request_id": request_id,
+        "source": "api",
+        "requester": "alice",
+        "target_agent": "ops-agent",
+        "objective": "deploy service",
+        "payload": {"service": "billing"},
+        "environment_hint": "prod",
+        "correlation_id": "corr-1",
+        "urgency": "high"
     })
 }
 
@@ -84,7 +69,7 @@ async fn healthz_ok() {
 }
 
 #[tokio::test]
-async fn contracts_endpoint_includes_governance_view() {
+async fn contracts_endpoint_ok() {
     let app = build_app(test_config()).await.unwrap();
     let response = app
         .oneshot(
@@ -103,355 +88,162 @@ async fn contracts_endpoint_includes_governance_view() {
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["api_version"], API_VERSION);
-    assert!(payload["openapi_sha256"].as_str().unwrap().len() == 64);
-    assert!(payload["contracts_set_sha256"].as_str().unwrap().len() == 64);
-    assert_eq!(
-        payload["governance"]["allowed_action_types"],
-        json!(["notify", "write_external", "start_job"])
-    );
 }
 
 #[tokio::test]
-async fn events_are_idempotent_for_identical_payload() {
+async fn create_run_and_fetch() {
     let app = build_app(test_config()).await.unwrap();
-    let event = sample_event("evt-idem");
 
-    let req1 = Request::builder()
-        .method("POST")
-        .uri("/v1/events")
-        .header("content-type", "application/json")
-        .body(Body::from(event.to_string()))
-        .unwrap();
-    let res1 = app.clone().oneshot(req1).await.unwrap();
-    assert_eq!(res1.status(), StatusCode::OK);
-    let body1 = axum::body::to_bytes(res1.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let p1: Value = serde_json::from_slice(&body1).unwrap();
-
-    let req2 = Request::builder()
-        .method("POST")
-        .uri("/v1/events")
-        .header("content-type", "application/json")
-        .body(Body::from(event.to_string()))
-        .unwrap();
-    let res2 = app.oneshot(req2).await.unwrap();
-    assert_eq!(res2.status(), StatusCode::OK);
-    let body2 = axum::body::to_bytes(res2.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let p2: Value = serde_json::from_slice(&body2).unwrap();
-
-    assert_eq!(p1, p2);
-}
-
-#[tokio::test]
-async fn duplicate_event_payload_mismatch_returns_409_with_hashes() {
-    let app = build_app(test_config()).await.unwrap();
-    let event = sample_event("evt-conflict");
-    let first = Request::builder()
-        .method("POST")
-        .uri("/v1/events")
-        .header("content-type", "application/json")
-        .body(Body::from(event.to_string()))
-        .unwrap();
-    let first_res = app.clone().oneshot(first).await.unwrap();
-    assert_eq!(first_res.status(), StatusCode::OK);
-
-    let mut changed = sample_event("evt-conflict");
-    changed["summary"] = Value::String("changed summary".to_string());
-    let second = Request::builder()
-        .method("POST")
-        .uri("/v1/events")
-        .header("content-type", "application/json")
-        .body(Body::from(changed.to_string()))
-        .unwrap();
-    let second_res = app.oneshot(second).await.unwrap();
-    assert_eq!(second_res.status(), StatusCode::CONFLICT);
-    let body = axum::body::to_bytes(second_res.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["error"]["code"], "conflict.payload_mismatch");
-    assert!(payload["error"]["details"]["existing_hash"].is_string());
-    assert!(payload["error"]["details"]["incoming_hash"].is_string());
-}
-
-#[tokio::test]
-async fn duplicate_action_result_payload_mismatch_returns_409_with_hashes() {
-    let app = build_app(test_config()).await.unwrap();
-    let first = json!({
-        "tenant_id": "tenant-a",
-        "plan_id": "plan-a",
-        "action_id": "act-a",
-        "status": "succeeded",
-        "occurred_at": "2026-02-14T00:00:00Z",
-        "evidence": {"provider_id": "x1"}
-    });
-    let second = json!({
-        "tenant_id": "tenant-a",
-        "plan_id": "plan-a",
-        "action_id": "act-a",
-        "status": "failed",
-        "occurred_at": "2026-02-14T00:00:00Z",
-        "evidence": {"provider_id": "x2"}
-    });
-
-    let first_res = app
+    let created = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/action-results")
+                .uri("/v2/operation-requests")
                 .header("content-type", "application/json")
-                .body(Body::from(first.to_string()))
+                .body(Body::from(sample_request("req-1").to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(first_res.status(), StatusCode::NO_CONTENT);
-
-    let second_res = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/action-results")
-                .header("content-type", "application/json")
-                .body(Body::from(second.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(second_res.status(), StatusCode::CONFLICT);
-    let body = axum::body::to_bytes(second_res.into_body(), usize::MAX)
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(created.into_body(), usize::MAX)
         .await
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["error"]["code"], "conflict.payload_mismatch");
-}
+    let run_id = payload["run"]["run_id"].as_str().unwrap().to_string();
 
-#[tokio::test]
-async fn provider_not_in_allowlist_is_rejected() {
-    let app = build_app(test_config()).await.unwrap();
-    let mut event = sample_event("evt-provider-deny");
-    event["labels"]["provider"] = Value::String("forbidden".to_string());
-
-    let response = app
+    let fetched = app
         .oneshot(
             Request::builder()
-                .method("POST")
-                .uri("/v1/events")
-                .header("content-type", "application/json")
-                .body(Body::from(event.to_string()))
+                .method("GET")
+                .uri(format!("/v2/runs/{run_id}"))
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["error"]["code"], "policy.provider_not_allowed");
+    assert_eq!(fetched.status(), StatusCode::OK);
 }
 
 #[tokio::test]
-async fn same_input_produces_same_plan_decision_time() {
+async fn low_risk_step_gets_allow_and_permit() {
     let app = build_app(test_config()).await.unwrap();
-    let event = sample_event("evt-deterministic");
 
-    let res1 = app
+    let created = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/events")
+                .uri("/v2/operation-requests")
                 .header("content-type", "application/json")
-                .body(Body::from(event.to_string()))
+                .body(Body::from(sample_request("req-2").to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
-    let body1 = axum::body::to_bytes(res1.into_body(), usize::MAX)
+    let created_body = axum::body::to_bytes(created.into_body(), usize::MAX)
         .await
         .unwrap();
-    let p1: Value = serde_json::from_slice(&body1).unwrap();
+    let created_json: Value = serde_json::from_slice(&created_body).unwrap();
+    let run_id = created_json["run"]["run_id"].as_str().unwrap();
 
-    let res2 = app
+    let intent = json!({
+        "intent_id": "intent-1",
+        "run_id": run_id,
+        "step_type": "emit_output",
+        "proposed_action": "return_summary",
+        "risk_level": "low",
+        "payload": {"text": "ok"}
+    });
+
+    let res = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/events")
+                .uri(format!("/v2/runs/{run_id}/step-intents"))
                 .header("content-type", "application/json")
-                .body(Body::from(event.to_string()))
+                .body(Body::from(intent.to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
-    let body2 = axum::body::to_bytes(res2.into_body(), usize::MAX)
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
         .await
         .unwrap();
-    let p2: Value = serde_json::from_slice(&body2).unwrap();
+    let step: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(step["decision"]["effect"], json!(DecisionEffect::Allow));
+    assert_eq!(step["status"], json!(StepStatus::Permitted));
+    assert!(step["permit"].is_object());
+}
 
-    assert_eq!(p1, p2);
+#[tokio::test]
+async fn write_tool_step_requires_approval() {
+    let app = build_app(test_config()).await.unwrap();
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/operation-requests")
+                .header("content-type", "application/json")
+                .body(Body::from(sample_request("req-3").to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created_body = axum::body::to_bytes(created.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created_json: Value = serde_json::from_slice(&created_body).unwrap();
+    let run_id = created_json["run"]["run_id"].as_str().unwrap();
+
+    let intent = json!({
+        "intent_id": "intent-2",
+        "run_id": run_id,
+        "step_type": "tool_call",
+        "proposed_action": "write_database",
+        "risk_level": "write",
+        "payload": {"table": "users"},
+        "tool_name": "db_writer"
+    });
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v2/runs/{run_id}/step-intents"))
+                .header("content-type", "application/json")
+                .body(Body::from(intent.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let step: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
-        p1["decision"]["evaluation_time"],
-        Value::String("2026-02-14T00:00:00Z".to_string())
+        step["decision"]["effect"],
+        json!(DecisionEffect::RequireApproval)
     );
-}
+    assert_eq!(step["status"], json!(StepStatus::WaitingForApproval));
+    let approval_id = step["approval_request"]["approval_id"].as_str().unwrap();
 
-#[tokio::test]
-async fn sqlite_event_idempotency_payload_mismatch_returns_409() {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before unix epoch")
-        .as_nanos();
-    let db_path = std::env::temp_dir().join(format!("arbiter-sqlite-{nanos}.db"));
-    let db_path_str = db_path.to_string_lossy().to_string();
-
-    let app1 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
-    let first = sample_event("evt-sqlite-conflict");
-    let first_res = app1
+    let grant = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/events")
-                .header("content-type", "application/json")
-                .body(Body::from(first.to_string()))
+                .uri(format!("/v2/approvals/{approval_id}/grant"))
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(first_res.status(), StatusCode::OK);
-
-    let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
-    let mut second = sample_event("evt-sqlite-conflict");
-    second["summary"] = Value::String("changed".to_string());
-    let second_res = app2
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/events")
-                .header("content-type", "application/json")
-                .body(Body::from(second.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(second_res.status(), StatusCode::CONFLICT);
-}
-
-#[tokio::test]
-async fn sqlite_action_result_payload_mismatch_returns_409() {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before unix epoch")
-        .as_nanos();
-    let db_path = std::env::temp_dir().join(format!("arbiter-sqlite-action-result-{nanos}.db"));
-    let db_path_str = db_path.to_string_lossy().to_string();
-
-    let app1 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
-    let first = json!({
-        "tenant_id": "tenant-a",
-        "plan_id": "plan-z",
-        "action_id": "act-z",
-        "status": "succeeded",
-        "occurred_at": "2026-02-14T00:00:00Z",
-        "evidence": {"external_id": "1"}
-    });
-    let first_res = app1
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/action-results")
-                .header("content-type", "application/json")
-                .body(Body::from(first.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(first_res.status(), StatusCode::NO_CONTENT);
-
-    let app2 = build_app(test_config_sqlite(&db_path_str)).await.unwrap();
-    let second = json!({
-        "tenant_id": "tenant-a",
-        "plan_id": "plan-z",
-        "action_id": "act-z",
-        "status": "failed",
-        "occurred_at": "2026-02-14T00:00:00Z",
-        "evidence": {"external_id": "2"}
-    });
-    let second_res = app2
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/action-results")
-                .header("content-type", "application/json")
-                .body(Body::from(second.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(second_res.status(), StatusCode::CONFLICT);
-}
-
-#[tokio::test]
-async fn audit_chain_verification_detects_tampering() {
-    let cfg = test_config();
-    let audit_path = cfg.audit.jsonl_path.clone();
-    let app = build_app(cfg).await.unwrap();
-
-    for event_id in ["evt-audit-1", "evt-audit-2"] {
-        let event = sample_event(event_id);
-        let _ = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/events")
-                    .header("content-type", "application/json")
-                    .body(Body::from(event.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-    }
-
-    assert!(verify_audit_chain(&audit_path).is_ok());
-
-    let mut lines: Vec<String> = std::fs::read_to_string(&audit_path)
-        .unwrap()
-        .lines()
-        .map(|line| line.to_string())
-        .collect();
-    let mut tampered: Value = serde_json::from_str(&lines[1]).unwrap();
-    tampered["kind"] = Value::String("tampered".to_string());
-    lines[1] = serde_json::to_string(&tampered).unwrap();
-    std::fs::write(&audit_path, format!("{}\n", lines.join("\n"))).unwrap();
-
-    assert!(verify_audit_chain(&audit_path).is_err());
-}
-
-#[tokio::test]
-async fn audit_chain_verification_with_mirror_succeeds_when_equal() {
-    let mut cfg = test_config();
-    let mirror_path = cfg.audit.jsonl_path.clone() + ".mirror";
-    cfg.audit.immutable_mirror_path = Some(mirror_path.clone());
-    let audit_path = cfg.audit.jsonl_path.clone();
-
-    let app = build_app(cfg).await.unwrap();
-    let event = sample_event("evt-mirror");
-    let _ = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/events")
-                .header("content-type", "application/json")
-                .body(Body::from(event.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert!(verify_audit_chain_with_mirror(&audit_path, Some(&mirror_path)).is_ok());
+    assert_eq!(grant.status(), StatusCode::NO_CONTENT);
 }
