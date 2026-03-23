@@ -17,13 +17,6 @@ CARGO_FILES = [
 ]
 
 SCHEMA_FILES = [
-    "contracts/v1/ops.event.schema.json",
-    "contracts/v1/ops.action.schema.json",
-    "contracts/v1/ops.plan.schema.json",
-    "contracts/v1/ops.approval_event.schema.json",
-    "contracts/v1/ops.action_result.schema.json",
-    "contracts/v1/ops.errors.schema.json",
-    "contracts/v1/ops.capabilities.schema.json",
     "contracts/v1/ops.contracts_metadata.schema.json",
     "config/config.schema.json",
 ]

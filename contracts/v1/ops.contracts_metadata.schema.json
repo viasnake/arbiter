@@ -8,8 +8,7 @@
     "openapi_sha256",
     "contracts_set_sha256",
     "generated_at",
-    "schemas",
-    "governance"
+    "schemas"
   ],
   "properties": {
     "api_version": { "type": "string", "const": "1.2.1" },
@@ -19,38 +18,6 @@
     "schemas": {
       "type": "object",
       "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
-    },
-    "governance": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["allowed_action_types", "allowed_providers", "approval_policy"],
-      "properties": {
-        "allowed_action_types": {
-          "type": "array",
-          "items": { "enum": ["notify", "write_external", "start_job"] }
-        },
-        "allowed_providers": { "type": "array", "items": { "type": "string" } },
-        "approval_policy": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["required_for_types", "defaults"],
-          "properties": {
-            "required_for_types": {
-              "type": "array",
-              "items": { "enum": ["notify", "write_external", "start_job"] }
-            },
-            "defaults": {
-              "type": "object",
-              "additionalProperties": { "type": "boolean" }
-            }
-          }
-        },
-        "max_payload_hints": {
-          "type": "object",
-          "additionalProperties": { "type": "integer", "minimum": 0 }
-        },
-        "error_codes": { "type": "string" }
-      }
     }
   }
 }

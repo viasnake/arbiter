@@ -130,31 +130,7 @@ paths:
 components:
   schemas:
     ContractsMetadata:
-      type: object
-      additionalProperties: false
-      required:
-        - api_version
-        - openapi_sha256
-        - contracts_set_sha256
-        - generated_at
-        - schemas
-      properties:
-        api_version:
-          type: string
-        openapi_sha256:
-          type: string
-          pattern: "^[a-f0-9]{64}$"
-        contracts_set_sha256:
-          type: string
-          pattern: "^[a-f0-9]{64}$"
-        generated_at:
-          type: string
-          format: date-time
-        schemas:
-          type: object
-          additionalProperties:
-            type: string
-            pattern: "^[a-f0-9]{64}$"
+      $ref: "../contracts/v1/ops.contracts_metadata.schema.json"
 
     OperationRequest:
       type: object

@@ -53,4 +53,4 @@ mise run build
 
 ## Documentation
 
-- Current integrated spec: `docs/current-spec.md`
+- Specification: `docs/spec.md`
