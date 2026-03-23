@@ -107,44 +107,6 @@ def bump(version: str) -> int:
     )
 
     changed |= replace_or_die(
-        "README.md",
-        r"^## API surface \(v[0-9]+\.[0-9]+\.[0-9]+\)$",
-        f"## API surface (v{version})",
-    )
-    changed |= replace_or_die(
-        "README.ja.md",
-        r"^## API \(v[0-9]+\.[0-9]+\.[0-9]+\)$",
-        f"## API (v{version})",
-    )
-
-    for path in ["README.md", "README.ja.md"]:
-        changed |= replace_or_die(
-            path,
-            r"^(docker pull ghcr\.io/viasnake/arbiter:)v[0-9]+\.[0-9]+\.[0-9]+$",
-            f"\\1v{version}",
-        )
-        changed |= replace_or_die(
-            path,
-            r"^(\s+ghcr\.io/viasnake/arbiter:)v[0-9]+\.[0-9]+\.[0-9]+(\s+\\)?$",
-            f"\\1v{version}\\2",
-        )
-        changed |= replace_or_die(
-            path,
-            r"(https://raw\.githubusercontent\.com/viasnake/arbiter/)v[0-9]+\.[0-9]+\.[0-9]+(/contracts/v1/ops\.event\.schema\.json)",
-            f"\\1v{version}\\2",
-        )
-        changed |= replace_or_die(
-            path,
-            r"(`docs/releases/)v[0-9]+\.[0-9]+\.[0-9]+(\.md`)",
-            f"\\1v{version}\\2",
-        )
-
-    changed |= replace_or_die(
-        "README.md",
-        r'("policy_version": "policy:)v[0-9]+\.[0-9]+\.[0-9]+(",)',
-        f'\\1v{version}\\2',
-    )
-    changed |= replace_or_die(
         "config/example-config.yaml",
         r'^(  version: "policy:)v[0-9]+\.[0-9]+\.[0-9]+(")$',
         f'\\1v{version}\\2',
@@ -197,27 +159,6 @@ def check() -> int:
         re.MULTILINE,
     ):
         failures.append("contracts/v1/ops.contracts_metadata.schema.json: api_version const mismatch")
-
-    readme_checks = [
-        ("README.md", rf"^## API surface \(v{re.escape(version)}\)$"),
-        ("README.ja.md", rf"^## API \(v{re.escape(version)}\)$"),
-        ("README.md", rf"^docker pull ghcr\.io/viasnake/arbiter:v{re.escape(version)}$"),
-        ("README.ja.md", rf"^docker pull ghcr\.io/viasnake/arbiter:v{re.escape(version)}$"),
-        (
-            "README.md",
-            rf"https://raw\.githubusercontent\.com/viasnake/arbiter/v{re.escape(version)}/contracts/v1/ops\.event\.schema\.json",
-        ),
-        (
-            "README.ja.md",
-            rf"https://raw\.githubusercontent\.com/viasnake/arbiter/v{re.escape(version)}/contracts/v1/ops\.event\.schema\.json",
-        ),
-        ("README.md", rf"`docs/releases/v{re.escape(version)}\.md`"),
-        ("README.ja.md", rf"`docs/releases/v{re.escape(version)}\.md`"),
-        ("README.md", rf'"policy_version": "policy:v{re.escape(version)}",'),
-    ]
-    for path, pattern in readme_checks:
-        if not re.search(pattern, read(path), re.MULTILINE):
-            failures.append(f"{path}: missing expected version reference ({pattern})")
 
     config_example = read("config/example-config.yaml")
     if not re.search(rf'^  version: "policy:v{re.escape(version)}"$', config_example, re.MULTILINE):

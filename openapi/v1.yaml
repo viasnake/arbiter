@@ -18,7 +18,7 @@ paths:
 
   /v1/contracts:
     get:
-      summary: Contracts and governance discovery
+      summary: Contract metadata discovery
       responses:
         "200":
           description: Contracts metadata
@@ -27,74 +27,101 @@ paths:
               schema:
                 $ref: "#/components/schemas/ContractsMetadata"
 
-  /v1/events:
+  /v2/operation-requests:
     post:
-      summary: Submit provider-agnostic event envelope
+      summary: Create a run from an operation request
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Event"
+              $ref: "#/components/schemas/OperationRequest"
+      responses:
+        "201":
+          description: Created run envelope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunEnvelope"
+        "400":
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v2/runs/{run_id}:
+    get:
+      summary: Retrieve run envelope
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         "200":
-          description: Generated plan envelope
+          description: Run envelope
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Plan"
-        "400":
-          description: Invalid request or policy rejection
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "409":
-          description: Idempotency payload mismatch
+                $ref: "#/components/schemas/RunEnvelope"
+        "404":
+          description: Run not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v1/approval-events:
+  /v2/runs/{run_id}/step-intents:
     post:
-      summary: Submit approval lifecycle event
+      summary: Submit step intent for run evaluation
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ApprovalEvent"
+              $ref: "#/components/schemas/StepIntent"
       responses:
-        "204":
-          description: Accepted
+        "200":
+          description: Evaluated step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Step"
         "400":
-          description: Invalid request payload
+          description: Invalid payload or terminal run state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Run not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v1/action-results:
+  /v2/approvals/{approval_id}/grant:
     post:
-      summary: Submit action execution result
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ActionResult"
+      summary: Grant a pending approval
+      parameters:
+        - name: approval_id
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         "204":
-          description: Accepted
-        "400":
-          description: Invalid request payload
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "409":
-          description: Idempotency payload mismatch
+          description: Approval granted
+        "404":
+          description: Approval or run not found
           content:
             application/json:
               schema:
@@ -102,17 +129,386 @@ paths:
 
 components:
   schemas:
-    Event:
-      $ref: "../contracts/v1/ops.event.schema.json"
-    Action:
-      $ref: "../contracts/v1/ops.action.schema.json"
-    Plan:
-      $ref: "../contracts/v1/ops.plan.schema.json"
-    ApprovalEvent:
-      $ref: "../contracts/v1/ops.approval_event.schema.json"
-    ActionResult:
-      $ref: "../contracts/v1/ops.action_result.schema.json"
     ContractsMetadata:
-      $ref: "../contracts/v1/ops.contracts_metadata.schema.json"
+      type: object
+      additionalProperties: false
+      required:
+        - api_version
+        - openapi_sha256
+        - contracts_set_sha256
+        - generated_at
+        - schemas
+      properties:
+        api_version:
+          type: string
+        openapi_sha256:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        contracts_set_sha256:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        generated_at:
+          type: string
+          format: date-time
+        schemas:
+          type: object
+          additionalProperties:
+            type: string
+            pattern: "^[a-f0-9]{64}$"
+
+    OperationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - source
+        - requester
+        - target_agent
+        - objective
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+        source:
+          type: string
+          minLength: 1
+        requester:
+          type: string
+          minLength: 1
+        target_agent:
+          type: string
+          minLength: 1
+        objective:
+          type: string
+          minLength: 1
+        payload:
+          type: object
+          additionalProperties: true
+          default: {}
+        environment_hint:
+          type: [string, "null"]
+        correlation_id:
+          type: [string, "null"]
+        urgency:
+          type: [string, "null"]
+
+    RunEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+        - run
+      properties:
+        run:
+          $ref: "#/components/schemas/Run"
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/Step"
+          default: []
+
+    Run:
+      type: object
+      additionalProperties: false
+      required:
+        - run_id
+        - request_id
+        - agent_id
+        - executor_id
+        - status
+        - created_at
+        - policy_snapshot
+        - budget_snapshot
+        - lease_owner
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        request_id:
+          type: string
+          minLength: 1
+        agent_id:
+          type: string
+          minLength: 1
+        executor_id:
+          type: string
+          minLength: 1
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: [string, "null"]
+          format: date-time
+        completed_at:
+          type: [string, "null"]
+          format: date-time
+        policy_snapshot:
+          type: object
+          additionalProperties: true
+        budget_snapshot:
+          type: object
+          additionalProperties: true
+        lease_owner:
+          type: string
+          minLength: 1
+
+    StepIntent:
+      type: object
+      additionalProperties: false
+      required:
+        - intent_id
+        - run_id
+        - step_type
+        - proposed_action
+        - risk_level
+      properties:
+        intent_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        step_type:
+          $ref: "#/components/schemas/StepType"
+        proposed_action:
+          type: string
+          minLength: 1
+        risk_level:
+          type: string
+          minLength: 1
+        payload:
+          type: object
+          additionalProperties: true
+          default: {}
+        tool_name:
+          type: [string, "null"]
+        justification:
+          type: [string, "null"]
+
+    Step:
+      type: object
+      additionalProperties: false
+      required:
+        - step_id
+        - run_id
+        - step_type
+        - status
+        - intent
+        - decision
+        - started_at
+      properties:
+        step_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        step_type:
+          $ref: "#/components/schemas/StepType"
+        status:
+          $ref: "#/components/schemas/StepStatus"
+        intent:
+          $ref: "#/components/schemas/StepIntent"
+        decision:
+          $ref: "#/components/schemas/Decision"
+        permit:
+          anyOf:
+            - $ref: "#/components/schemas/ExecutionPermit"
+            - type: "null"
+        approval_request:
+          anyOf:
+            - $ref: "#/components/schemas/ApprovalRequest"
+            - type: "null"
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: [string, "null"]
+          format: date-time
+
+    Decision:
+      type: object
+      additionalProperties: false
+      required:
+        - decision_id
+        - effect
+        - reason
+      properties:
+        decision_id:
+          type: string
+          minLength: 1
+        effect:
+          $ref: "#/components/schemas/DecisionEffect"
+        reason:
+          type: string
+          minLength: 1
+        applied_policies:
+          type: array
+          items:
+            type: string
+          default: []
+        constraints:
+          type: object
+          additionalProperties: true
+          default: {}
+        required_approvers:
+          type: array
+          items:
+            type: string
+          default: []
+        executor_scope:
+          type: [string, "null"]
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+
+    ExecutionPermit:
+      type: object
+      additionalProperties: false
+      required:
+        - permit_id
+        - run_id
+        - step_id
+        - executor_id
+        - allowed_action
+        - constraints
+        - issued_at
+        - expires_at
+        - token
+      properties:
+        permit_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        step_id:
+          type: string
+          minLength: 1
+        executor_id:
+          type: string
+          minLength: 1
+        allowed_action:
+          type: string
+          minLength: 1
+        constraints:
+          type: object
+          additionalProperties: true
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        token:
+          type: string
+          minLength: 1
+
+    ApprovalRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - approval_id
+        - run_id
+        - step_id
+        - requested_action
+        - approver_set
+        - status
+        - reason
+        - expires_at
+      properties:
+        approval_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        step_id:
+          type: string
+          minLength: 1
+        requested_action:
+          type: string
+          minLength: 1
+        approver_set:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+          minLength: 1
+        expires_at:
+          type: string
+          format: date-time
+
+    RunStatus:
+      type: string
+      enum:
+        - queued
+        - dispatched
+        - running
+        - waiting_for_approval
+        - waiting_for_executor
+        - completed
+        - failed
+        - cancelled
+        - timed_out
+
+    StepStatus:
+      type: string
+      enum:
+        - pending
+        - intent_received
+        - decision_made
+        - permitted
+        - in_progress
+        - waiting_for_approval
+        - completed
+        - failed
+        - denied
+        - expired
+
+    StepType:
+      type: string
+      enum:
+        - llm_call
+        - tool_call
+        - approval_wait
+        - emit_output
+        - human_message
+        - error
+        - cancel
+        - resume
+
+    DecisionEffect:
+      type: string
+      enum:
+        - allow
+        - deny
+        - require_approval
+        - reroute
+        - suspend
+        - downgrade
+
     Error:
-      $ref: "../contracts/v1/ops.errors.schema.json"
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              description: Optional structured diagnostics
