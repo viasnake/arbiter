@@ -27,7 +27,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ContractsMetadata"
 
-  /v2/operation-requests:
+  /v1/operation-requests:
     post:
       summary: Create a run from an operation request
       requestBody:
@@ -38,19 +38,19 @@ paths:
               $ref: "#/components/schemas/OperationRequest"
       responses:
         "201":
-          description: Created run envelope
+          description: Run accepted
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RunEnvelope"
-        "400":
-          description: Invalid request payload
+                $ref: "#/components/schemas/OperationRequestAccepted"
+        "409":
+          description: Duplicate conflict
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v2/runs/{run_id}:
+  /v1/runs/{run_id}:
     get:
       summary: Retrieve run envelope
       parameters:
@@ -73,7 +73,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v2/runs/{run_id}/step-intents:
+  /v1/runs/{run_id}/step-intents:
     post:
       summary: Submit step intent for run evaluation
       parameters:
@@ -95,37 +95,205 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Step"
-        "400":
-          description: Invalid payload or terminal run state
+        "409":
+          description: Conflict
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "404":
-          description: Run not found
+        "422":
+          description: Invalid transition
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v2/approvals/{approval_id}/grant:
+  /v1/runs/{run_id}/step-results:
     post:
-      summary: Grant a pending approval
+      summary: Submit execution result
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StepResultSubmission"
+      responses:
+        "200":
+          description: Updated statuses
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StepResultResponse"
+        "404":
+          description: Run or step not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Invalid transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "423":
+          description: Approval required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/approvals/{approval_id}/grant:
+    post:
+      summary: Grant approval
       parameters:
         - name: approval_id
           in: path
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalActionRequest"
       responses:
-        "204":
-          description: Approval granted
+        "200":
+          description: Approval updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
         "404":
-          description: Approval or run not found
+          description: Approval not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "409":
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Invalid transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/approvals/{approval_id}/deny:
+    post:
+      summary: Deny approval
+      parameters:
+        - name: approval_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalActionRequest"
+      responses:
+        "200":
+          description: Approval updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "404":
+          description: Approval not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Invalid transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/approvals/{approval_id}/cancel:
+    post:
+      summary: Cancel approval
+      parameters:
+        - name: approval_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalActionRequest"
+      responses:
+        "200":
+          description: Approval updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "404":
+          description: Approval not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Invalid transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/audit/runs/{run_id}:
+    get:
+      summary: List audit events by run
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit event list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditRunEventsResponse"
 
 components:
   schemas:
@@ -135,356 +303,241 @@ components:
     OperationRequest:
       type: object
       additionalProperties: false
-      required:
-        - request_id
-        - source
-        - requester
-        - target_agent
-        - objective
+      required: [request_id, requester, source, objective]
       properties:
-        request_id:
-          type: string
-          minLength: 1
-        source:
-          type: string
-          minLength: 1
-        requester:
-          type: string
-          minLength: 1
-        target_agent:
-          type: string
-          minLength: 1
-        objective:
-          type: string
-          minLength: 1
-        payload:
-          type: object
-          additionalProperties: true
-          default: {}
-        environment_hint:
-          type: [string, "null"]
-        correlation_id:
-          type: [string, "null"]
-        urgency:
-          type: [string, "null"]
+        request_id: { type: string, minLength: 1 }
+        requester: { type: string, minLength: 1 }
+        source: { type: string, minLength: 1 }
+        objective: { type: string, minLength: 1 }
+        environment_hint: { type: [string, "null"] }
+        metadata: { type: object, additionalProperties: true, default: {} }
 
-    RunEnvelope:
+    OperationRequestAccepted:
       type: object
       additionalProperties: false
-      required:
-        - run
+      required: [run_id, status, decision_summary, links]
       properties:
-        run:
-          $ref: "#/components/schemas/Run"
-        steps:
-          type: array
-          items:
-            $ref: "#/components/schemas/Step"
-          default: []
+        run_id: { type: string }
+        status: { $ref: "#/components/schemas/RunStatus" }
+        decision_summary: { type: string }
+        links:
+          type: object
+          additionalProperties: { type: string }
 
     Run:
       type: object
       additionalProperties: false
       required:
-        - run_id
-        - request_id
-        - agent_id
-        - executor_id
-        - status
-        - created_at
-        - policy_snapshot
-        - budget_snapshot
-        - lease_owner
+        [run_id, request_id, requester, source, objective, environment, status, created_at, updated_at, risk_summary]
       properties:
-        run_id:
-          type: string
-          minLength: 1
-        request_id:
-          type: string
-          minLength: 1
-        agent_id:
-          type: string
-          minLength: 1
-        executor_id:
-          type: string
-          minLength: 1
-        status:
-          $ref: "#/components/schemas/RunStatus"
-        created_at:
-          type: string
-          format: date-time
-        started_at:
-          type: [string, "null"]
-          format: date-time
-        completed_at:
-          type: [string, "null"]
-          format: date-time
-        policy_snapshot:
-          type: object
-          additionalProperties: true
-        budget_snapshot:
-          type: object
-          additionalProperties: true
-        lease_owner:
-          type: string
-          minLength: 1
+        run_id: { type: string }
+        request_id: { type: string }
+        requester: { type: string }
+        source: { type: string }
+        objective: { type: string }
+        environment: { type: string }
+        status: { $ref: "#/components/schemas/RunStatus" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        risk_summary: { type: object, additionalProperties: true }
+
+    RunEnvelope:
+      type: object
+      additionalProperties: false
+      required: [run, steps, approvals, permits]
+      properties:
+        run: { $ref: "#/components/schemas/Run" }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/Step" }
+        approvals:
+          type: array
+          items: { $ref: "#/components/schemas/Approval" }
+        permits:
+          type: array
+          items: { $ref: "#/components/schemas/ExecutionPermit" }
 
     StepIntent:
       type: object
       additionalProperties: false
-      required:
-        - intent_id
-        - run_id
-        - step_type
-        - proposed_action
-        - risk_level
+      required: [intent_type, capability, target, risk_level, provider]
       properties:
-        intent_id:
-          type: string
-          minLength: 1
-        run_id:
-          type: string
-          minLength: 1
-        step_type:
-          $ref: "#/components/schemas/StepType"
-        proposed_action:
-          type: string
-          minLength: 1
-        risk_level:
-          type: string
-          minLength: 1
-        payload:
-          type: object
-          additionalProperties: true
-          default: {}
-        tool_name:
-          type: [string, "null"]
-        justification:
-          type: [string, "null"]
-
-    Step:
-      type: object
-      additionalProperties: false
-      required:
-        - step_id
-        - run_id
-        - step_type
-        - status
-        - intent
-        - decision
-        - started_at
-      properties:
-        step_id:
-          type: string
-          minLength: 1
-        run_id:
-          type: string
-          minLength: 1
-        step_type:
-          $ref: "#/components/schemas/StepType"
-        status:
-          $ref: "#/components/schemas/StepStatus"
-        intent:
-          $ref: "#/components/schemas/StepIntent"
-        decision:
-          $ref: "#/components/schemas/Decision"
-        permit:
-          anyOf:
-            - $ref: "#/components/schemas/ExecutionPermit"
-            - type: "null"
-        approval_request:
-          anyOf:
-            - $ref: "#/components/schemas/ApprovalRequest"
-            - type: "null"
-        started_at:
-          type: string
-          format: date-time
-        completed_at:
-          type: [string, "null"]
-          format: date-time
+        step_id: { type: [string, "null"] }
+        client_step_id: { type: [string, "null"] }
+        intent_type: { type: string }
+        capability: { type: string }
+        target: { type: string }
+        risk_level: { type: string }
+        provider: { type: string }
+        metadata: { type: object, additionalProperties: true, default: {} }
 
     Decision:
       type: object
       additionalProperties: false
-      required:
-        - decision_id
-        - effect
-        - reason
+      required: [decision_id, effect, rationale, applied_policies, permit_constraints, required_approvers]
       properties:
-        decision_id:
-          type: string
-          minLength: 1
-        effect:
-          $ref: "#/components/schemas/DecisionEffect"
-        reason:
-          type: string
-          minLength: 1
+        decision_id: { type: string }
+        effect: { $ref: "#/components/schemas/DecisionEffect" }
+        rationale: { type: string }
         applied_policies:
           type: array
-          items:
-            type: string
-          default: []
-        constraints:
-          type: object
-          additionalProperties: true
-          default: {}
+          items: { type: string }
+        permit_constraints: { type: object, additionalProperties: true }
         required_approvers:
           type: array
-          items:
-            type: string
-          default: []
-        executor_scope:
-          type: [string, "null"]
-        expires_at:
-          type: [string, "null"]
-          format: date-time
+          items: { type: string }
+
+    Step:
+      type: object
+      additionalProperties: false
+      required: [step_id, run_id, status, intent, decision, created_at]
+      properties:
+        step_id: { type: string }
+        run_id: { type: string }
+        status: { $ref: "#/components/schemas/StepStatus" }
+        intent: { $ref: "#/components/schemas/StepIntent" }
+        decision: { $ref: "#/components/schemas/Decision" }
+        permit:
+          anyOf:
+            - { $ref: "#/components/schemas/ExecutionPermit" }
+            - { type: "null" }
+        approval_id: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+
+    Approval:
+      type: object
+      additionalProperties: false
+      required: [approval_id, run_id, step_id, status, required_approvers, reason, created_at]
+      properties:
+        approval_id: { type: string }
+        run_id: { type: string }
+        step_id: { type: string }
+        status: { $ref: "#/components/schemas/ApprovalStatus" }
+        required_approvers:
+          type: array
+          items: { type: string }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: [string, "null"], format: date-time }
+        decided_by: { type: [string, "null"] }
+
+    ApprovalActionRequest:
+      type: object
+      additionalProperties: false
+      required: [actor]
+      properties:
+        actor: { type: string }
+        reason: { type: [string, "null"] }
 
     ExecutionPermit:
       type: object
       additionalProperties: false
-      required:
-        - permit_id
-        - run_id
-        - step_id
-        - executor_id
-        - allowed_action
-        - constraints
-        - issued_at
-        - expires_at
-        - token
+      required: [permit_id, run_id, step_id, issuer, constraints, issued_at, expires_at]
       properties:
-        permit_id:
-          type: string
-          minLength: 1
-        run_id:
-          type: string
-          minLength: 1
-        step_id:
-          type: string
-          minLength: 1
-        executor_id:
-          type: string
-          minLength: 1
-        allowed_action:
-          type: string
-          minLength: 1
-        constraints:
-          type: object
-          additionalProperties: true
-        issued_at:
-          type: string
-          format: date-time
-        expires_at:
-          type: string
-          format: date-time
-        token:
-          type: string
-          minLength: 1
+        permit_id: { type: string }
+        run_id: { type: string }
+        step_id: { type: string }
+        issuer: { type: string }
+        constraints: { type: object, additionalProperties: true }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
 
-    ApprovalRequest:
+    StepResultSubmission:
+      type: object
+      additionalProperties: false
+      required: [step_id, execution_result]
+      properties:
+        step_id: { type: string }
+        execution_result: { type: string }
+        artifacts: { type: object, additionalProperties: true, default: {} }
+        error: { type: [string, "null"] }
+        executor_metadata: { type: object, additionalProperties: true, default: {} }
+
+    StepResultResponse:
+      type: object
+      additionalProperties: false
+      required: [step_status, run_status]
+      properties:
+        step_status: { $ref: "#/components/schemas/StepStatus" }
+        run_status: { $ref: "#/components/schemas/RunStatus" }
+
+    AuditEvent:
       type: object
       additionalProperties: false
       required:
-        - approval_id
-        - run_id
-        - step_id
-        - requested_action
-        - approver_set
-        - status
-        - reason
-        - expires_at
+        [event_id, event_type, run_id, actor, timestamp, payload_hash, prev_hash, hash, policy_refs]
       properties:
-        approval_id:
-          type: string
-          minLength: 1
-        run_id:
-          type: string
-          minLength: 1
-        step_id:
-          type: string
-          minLength: 1
-        requested_action:
-          type: string
-          minLength: 1
-        approver_set:
+        event_id: { type: string }
+        event_type: { type: string }
+        run_id: { type: string }
+        step_id: { type: [string, "null"] }
+        approval_id: { type: [string, "null"] }
+        actor: { type: string }
+        timestamp: { type: string, format: date-time }
+        payload_hash: { type: string }
+        prev_hash: { type: string }
+        hash: { type: string }
+        rationale: { type: [string, "null"] }
+        policy_refs:
           type: array
-          items:
-            type: string
-        status:
-          type: string
-          minLength: 1
-        reason:
-          type: string
-          minLength: 1
-        expires_at:
-          type: string
-          format: date-time
+          items: { type: string }
+
+    AuditRunEventsResponse:
+      type: object
+      additionalProperties: false
+      required: [run_id, events]
+      properties:
+        run_id: { type: string }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEvent" }
 
     RunStatus:
       type: string
       enum:
-        - queued
-        - dispatched
-        - running
+        - accepted
+        - planning
         - waiting_for_approval
-        - waiting_for_executor
-        - completed
+        - ready
+        - running
+        - blocked
+        - succeeded
         - failed
         - cancelled
-        - timed_out
 
     StepStatus:
       type: string
       enum:
-        - pending
-        - intent_received
-        - decision_made
+        - declared
+        - evaluating
+        - approval_required
         - permitted
-        - in_progress
-        - waiting_for_approval
+        - executing
         - completed
+        - rejected
         - failed
-        - denied
-        - expired
-
-    StepType:
-      type: string
-      enum:
-        - llm_call
-        - tool_call
-        - approval_wait
-        - emit_output
-        - human_message
-        - error
-        - cancel
-        - resume
+        - cancelled
 
     DecisionEffect:
       type: string
-      enum:
-        - allow
-        - deny
-        - require_approval
-        - reroute
-        - suspend
-        - downgrade
+      enum: [allow, deny, require_approval]
+
+    ApprovalStatus:
+      type: string
+      enum: [requested, granted, denied, cancelled]
 
     Error:
       type: object
       additionalProperties: false
-      required:
-        - error
+      required: [error]
       properties:
         error:
           type: object
           additionalProperties: false
-          required:
-            - code
-            - message
+          required: [code, message]
           properties:
-            code:
-              type: string
-            message:
-              type: string
+            code: { type: string }
+            message: { type: string }
             details:
               description: Optional structured diagnostics

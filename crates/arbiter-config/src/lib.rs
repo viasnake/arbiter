@@ -21,6 +21,7 @@ pub struct Config {
     pub store: Store,
     pub governance: Governance,
     pub policy: Policy,
+    pub approver: Approver,
     pub audit: Audit,
 }
 
@@ -38,6 +39,14 @@ pub struct Store {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Governance {
     pub allowed_providers: Vec<String>,
+    #[serde(default)]
+    pub capability_allowlist: Vec<String>,
+    #[serde(default)]
+    pub capability_denylist: Vec<String>,
+    #[serde(default = "default_permit_ttl_seconds")]
+    pub permit_ttl_seconds: u64,
+    #[serde(default = "default_idempotency_retention_hours")]
+    pub idempotency_retention_hours: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +58,16 @@ pub struct Policy {
     pub require_approval_for_notify: bool,
     #[serde(default = "default_require_start_job")]
     pub require_approval_for_start_job: bool,
+    #[serde(default = "default_require_production")]
+    pub require_approval_for_production: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Approver {
+    #[serde(default)]
+    pub default_approvers: Vec<String>,
+    #[serde(default)]
+    pub production_approvers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +87,18 @@ fn default_require_notify() -> bool {
 
 fn default_require_start_job() -> bool {
     false
+}
+
+fn default_require_production() -> bool {
+    true
+}
+
+fn default_permit_ttl_seconds() -> u64 {
+    300
+}
+
+fn default_idempotency_retention_hours() -> u64 {
+    24
 }
 
 pub fn load_and_validate(path: &str) -> Result<Config, ConfigError> {
@@ -138,9 +169,27 @@ fn validate_runtime_support(cfg: &Config) -> Result<(), ConfigError> {
         ));
     }
 
+    if cfg.governance.permit_ttl_seconds == 0 {
+        return Err(ConfigError::UnsupportedConfig(
+            "governance.permit_ttl_seconds must be > 0".to_string(),
+        ));
+    }
+
+    if cfg.governance.idempotency_retention_hours == 0 {
+        return Err(ConfigError::UnsupportedConfig(
+            "governance.idempotency_retention_hours must be > 0".to_string(),
+        ));
+    }
+
     if cfg.policy.version.trim().is_empty() {
         return Err(ConfigError::UnsupportedConfig(
             "policy.version must not be empty".to_string(),
+        ));
+    }
+
+    if cfg.approver.default_approvers.is_empty() {
+        return Err(ConfigError::UnsupportedConfig(
+            "approver.default_approvers must not be empty".to_string(),
         ));
     }
 

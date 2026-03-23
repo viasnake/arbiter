@@ -36,43 +36,29 @@ pub fn contracts_manifest_v1() -> ContractsManifest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
-    Queued,
-    Dispatched,
-    Running,
+    Accepted,
+    Planning,
     WaitingForApproval,
-    WaitingForExecutor,
-    Completed,
+    Ready,
+    Running,
+    Blocked,
+    Succeeded,
     Failed,
     Cancelled,
-    TimedOut,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
-    Pending,
-    IntentReceived,
-    DecisionMade,
+    Declared,
+    Evaluating,
+    ApprovalRequired,
     Permitted,
-    InProgress,
-    WaitingForApproval,
+    Executing,
     Completed,
+    Rejected,
     Failed,
-    Denied,
-    Expired,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum StepType {
-    LlmCall,
-    ToolCall,
-    ApprovalWait,
-    EmitOutput,
-    HumanMessage,
-    Error,
-    Cancel,
-    Resume,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,9 +67,15 @@ pub enum DecisionEffect {
     Allow,
     Deny,
     RequireApproval,
-    Reroute,
-    Suspend,
-    Downgrade,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalStatus {
+    Requested,
+    Granted,
+    Denied,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,16 +84,20 @@ pub struct OperationRequest {
     pub request_id: String,
     pub source: String,
     pub requester: String,
-    pub target_agent: String,
     pub objective: String,
-    #[serde(default)]
-    pub payload: Value,
     #[serde(default)]
     pub environment_hint: Option<String>,
     #[serde(default)]
-    pub correlation_id: Option<String>,
-    #[serde(default)]
-    pub urgency: Option<String>,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationRequestAccepted {
+    pub run_id: String,
+    pub status: RunStatus,
+    pub decision_summary: String,
+    pub links: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,33 +105,31 @@ pub struct OperationRequest {
 pub struct Run {
     pub run_id: String,
     pub request_id: String,
-    pub agent_id: String,
-    pub executor_id: String,
+    pub requester: String,
+    pub source: String,
+    pub objective: String,
+    pub environment: String,
     pub status: RunStatus,
     pub created_at: String,
+    pub updated_at: String,
     #[serde(default)]
-    pub started_at: Option<String>,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-    pub policy_snapshot: Value,
-    pub budget_snapshot: Value,
-    pub lease_owner: String,
+    pub risk_summary: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepIntent {
-    pub intent_id: String,
-    pub run_id: String,
-    pub step_type: StepType,
-    pub proposed_action: String,
+    #[serde(default)]
+    pub step_id: Option<String>,
+    #[serde(default)]
+    pub client_step_id: Option<String>,
+    pub intent_type: String,
+    pub capability: String,
+    pub target: String,
     pub risk_level: String,
+    pub provider: String,
     #[serde(default)]
-    pub payload: Value,
-    #[serde(default)]
-    pub tool_name: Option<String>,
-    #[serde(default)]
-    pub justification: Option<String>,
+    pub metadata: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,17 +137,13 @@ pub struct StepIntent {
 pub struct Decision {
     pub decision_id: String,
     pub effect: DecisionEffect,
-    pub reason: String,
+    pub rationale: String,
     #[serde(default)]
     pub applied_policies: Vec<String>,
     #[serde(default)]
-    pub constraints: Value,
+    pub permit_constraints: Value,
     #[serde(default)]
     pub required_approvers: Vec<String>,
-    #[serde(default)]
-    pub executor_scope: Option<String>,
-    #[serde(default)]
-    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,25 +152,26 @@ pub struct ExecutionPermit {
     pub permit_id: String,
     pub run_id: String,
     pub step_id: String,
-    pub executor_id: String,
-    pub allowed_action: String,
+    pub issuer: String,
     pub constraints: Value,
     pub issued_at: String,
     pub expires_at: String,
-    pub token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ApprovalRequest {
+pub struct Approval {
     pub approval_id: String,
     pub run_id: String,
     pub step_id: String,
-    pub requested_action: String,
-    pub approver_set: Vec<String>,
-    pub status: String,
+    pub status: ApprovalStatus,
+    pub required_approvers: Vec<String>,
     pub reason: String,
-    pub expires_at: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub decided_at: Option<String>,
+    #[serde(default)]
+    pub decided_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,17 +179,16 @@ pub struct ApprovalRequest {
 pub struct Step {
     pub step_id: String,
     pub run_id: String,
-    pub step_type: StepType,
     pub status: StepStatus,
     pub intent: StepIntent,
     pub decision: Decision,
     #[serde(default)]
     pub permit: Option<ExecutionPermit>,
     #[serde(default)]
-    pub approval_request: Option<ApprovalRequest>,
-    pub started_at: String,
+    pub approval_id: Option<String>,
+    pub created_at: String,
     #[serde(default)]
-    pub completed_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +197,66 @@ pub struct RunEnvelope {
     pub run: Run,
     #[serde(default)]
     pub steps: Vec<Step>,
+    #[serde(default)]
+    pub approvals: Vec<Approval>,
+    #[serde(default)]
+    pub permits: Vec<ExecutionPermit>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepResultSubmission {
+    pub step_id: String,
+    pub execution_result: String,
+    #[serde(default)]
+    pub artifacts: Value,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub executor_metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepResultResponse {
+    pub step_status: StepStatus,
+    pub run_status: RunStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalActionRequest {
+    pub actor: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuditEvent {
+    pub event_id: String,
+    pub event_type: String,
+    pub run_id: String,
+    #[serde(default)]
+    pub step_id: Option<String>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    pub actor: String,
+    pub timestamp: String,
+    pub payload_hash: String,
+    pub prev_hash: String,
+    pub hash: String,
+    #[serde(default)]
+    pub rationale: Option<String>,
+    #[serde(default)]
+    pub policy_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuditRunEventsResponse {
+    pub run_id: String,
+    pub events: Vec<AuditEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

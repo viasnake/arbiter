@@ -9,12 +9,23 @@ governance:
     - "generic"
     - "email"
     - "chat"
+  capability_allowlist: []
+  capability_denylist: []
+  permit_ttl_seconds: 300
+  idempotency_retention_hours: 24
 
 policy:
   version: "policy:v1.2.1"
   require_approval_for_write_external: true
   require_approval_for_notify: false
   require_approval_for_start_job: false
+  require_approval_for_production: true
+
+approver:
+  default_approvers:
+    - "team-lead"
+  production_approvers:
+    - "prod-owner"
 
 audit:
   jsonl_path: "./arbiter-audit.jsonl"

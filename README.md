@@ -1,46 +1,115 @@
 # Arbiter
 
-Arbiter is a governance-oriented control plane for AI operations.
+Arbiter is a provider-agnostic governance plane for AI agent operations.
 
-The current runtime model is run-based (`v2` paths), with compatibility endpoints under `v1` for health and contract metadata.
+Arbiter governs operations through:
 
-## Naming
+`request -> run -> step -> approval -> permit -> result -> audit`
 
-- Arbiter "v2" is the current runtime surface.
-- `/v1/*` paths are still used for health and contract metadata.
+It is not an LLM runtime, scheduler, or knowledge pipeline.
 
-## Runtime API surface
+## Responsibilities
+
+- Request intake and run orchestration
+- Policy evaluation (allow/deny/require_approval)
+- Approval mediation and permit issuance
+- Idempotency and conflict handling
+- Deterministic state transitions
+- Tamper-evident audit chain
+
+## Non-responsibilities
+
+- LLM reasoning and model selection
+- Tool execution implementation
+- Knowledge ETL/indexing/retrieval engine
+- Job scheduler and background workflow runtime
+
+## Public API (`/v1` only)
 
 - `GET /v1/healthz`
 - `GET /v1/contracts`
-- `POST /v2/operation-requests`
-- `GET /v2/runs/{run_id}`
-- `POST /v2/runs/{run_id}/step-intents`
-- `POST /v2/approvals/{approval_id}/grant`
+- `POST /v1/operation-requests`
+- `GET /v1/runs/{run_id}`
+- `POST /v1/runs/{run_id}/step-intents`
+- `POST /v1/runs/{run_id}/step-results`
+- `POST /v1/approvals/{approval_id}/grant`
+- `POST /v1/approvals/{approval_id}/deny`
+- `POST /v1/approvals/{approval_id}/cancel`
+- `GET /v1/audit/runs/{run_id}`
 
 OpenAPI source of truth: `openapi/v1.yaml`
 
-## Runtime behavior
+## Run and Step state machines
 
-- `POST /v2/operation-requests` creates a run and writes an audit record.
-- `POST /v2/runs/{run_id}/step-intents` evaluates a step intent and returns a decision.
-- Approval is required only when `step_type=tool_call` and `risk_level` is `write`, `external`, or `high`.
-- `POST /v2/approvals/{approval_id}/grant` turns a waiting approval into a permit.
-- Audit records are append-only and hash-chained (`prev_hash`, `record_hash`).
+Run status:
+
+- `accepted`
+- `planning`
+- `waiting_for_approval`
+- `ready`
+- `running`
+- `blocked`
+- `succeeded`
+- `failed`
+- `cancelled`
+
+Step status:
+
+- `declared`
+- `evaluating`
+- `approval_required`
+- `permitted`
+- `executing`
+- `completed`
+- `rejected`
+- `failed`
+- `cancelled`
+
+## Idempotency
+
+- Operation requests: keyed by `request_id`
+- Step intents: keyed by `run_id + (client_step_id|step_id)`
+- Approval actions: keyed by `approval_id + action`
+- Step results: keyed by `run_id + step_id`
+
+If same key + same payload is retried, Arbiter returns the original response.
+If same key + different payload is submitted, Arbiter returns `409 conflict`.
+
+## Audit chain
+
+- Audit entries are append-only JSONL
+- Every entry includes `prev_hash` and `hash`
+- Hashes are computed from canonical JSON
+- On startup, Arbiter restores the last hash from existing audit log
+
+Verify:
+
+```bash
+arbiter audit-verify --path ./arbiter-audit.jsonl --mirror-path ./arbiter-audit-mirror.jsonl
+```
+
+## Configuration example
+
+See `config/example-config.yaml`.
+
+Key enforced settings:
+
+- `governance.allowed_providers`
+- `governance.capability_allowlist/denylist`
+- `governance.permit_ttl_seconds`
+- `policy.require_approval_for_*`
+- `approver.default_approvers` / `approver.production_approvers`
+- `store.kind` (`memory` or `sqlite`)
+- `audit.jsonl_path`
 
 ## CLI
 
 - `arbiter serve --config ./config/example-config.yaml`
+- `arbiter config-validate --config ./config/example-config.yaml`
 - `arbiter audit-verify --path ./arbiter-audit.jsonl --mirror-path ./arbiter-audit-mirror.jsonl`
+- `arbiter store-doctor --config ./config/example-config.yaml`
 
-## Run locally
-
-```bash
-mise install
-mise exec -- cargo run -- serve --config ./config/example-config.yaml
-```
-
-## Verify
+## Verify locally
 
 ```bash
 mise run version-check

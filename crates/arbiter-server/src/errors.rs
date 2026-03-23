@@ -1,14 +1,13 @@
 use arbiter_contracts::{ErrorBody, ErrorResponse};
 use axum::http::StatusCode;
 use axum::Json;
-use serde_json::Value;
 
 #[derive(Debug)]
 pub(crate) struct ApiFailure {
     status: StatusCode,
     code: String,
     message: String,
-    details: Option<Value>,
+    details: Option<serde_json::Value>,
 }
 
 impl ApiFailure {
@@ -30,10 +29,37 @@ impl ApiFailure {
         }
     }
 
+    pub(crate) fn conflict(code: &str, message: &str) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: code.to_string(),
+            message: message.to_string(),
+            details: None,
+        }
+    }
+
+    pub(crate) fn invalid_transition(code: &str, message: &str) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            code: code.to_string(),
+            message: message.to_string(),
+            details: None,
+        }
+    }
+
+    pub(crate) fn approval_required(code: &str, message: &str) -> Self {
+        Self {
+            status: StatusCode::LOCKED,
+            code: code.to_string(),
+            message: message.to_string(),
+            details: None,
+        }
+    }
+
     pub(crate) fn internal(message: &str) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: "internal.error".to_string(),
+            code: "internal_error".to_string(),
             message: message.to_string(),
             details: None,
         }

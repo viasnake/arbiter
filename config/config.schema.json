@@ -4,7 +4,7 @@
   "title": "Arbiter Configuration Schema v1.2.1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["server", "store", "governance", "policy", "audit"],
+  "required": ["server", "store", "governance", "policy", "approver", "audit"],
   "properties": {
     "server": {
       "type": "object",
@@ -49,6 +49,32 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "capability_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "capability_denylist": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "permit_ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 300
+        },
+        "idempotency_retention_hours": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 24
         }
       }
     },
@@ -72,6 +98,33 @@
         "require_approval_for_start_job": {
           "type": "boolean",
           "default": false
+        },
+        "require_approval_for_production": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "approver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_approvers"],
+      "properties": {
+        "default_approvers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "production_approvers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
         }
       }
     },

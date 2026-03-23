@@ -1,13 +1,6 @@
 # Arbiter Specification
 
-This document is the single source of truth for Arbiter runtime behavior.
-
-It describes the implemented runtime behavior.
-
-## Naming
-
-- "Arbiter v2" refers to the run-based runtime model.
-- Runtime APIs are split across `/v1` (health and contracts metadata) and `/v2` (run lifecycle).
+This document defines the implemented runtime behavior.
 
 ## Runtime Endpoints
 
@@ -17,48 +10,138 @@ It describes the implemented runtime behavior.
 
 ### `GET /v1/contracts`
 
-- Returns `200` with contract metadata generated at build time.
-- Response fields:
-  - `api_version`
-  - `openapi_sha256`
-  - `contracts_set_sha256`
-  - `generated_at`
-  - `schemas` (map: canonical schema path -> sha256)
+- Returns `ContractsMetadata` generated at build time.
 
-### `POST /v2/operation-requests`
+### `POST /v1/operation-requests`
 
-- Request body: `OperationRequest`.
-- Creates a new run and persists it in memory.
-- Returns `201` with `RunEnvelope`.
-- Appends audit event `run_created`.
+- Input: `OperationRequest`
+- Creates one `Run`
+- Returns `201` with `OperationRequestAccepted`
+- Idempotent by `request_id`
 
-### `GET /v2/runs/{run_id}`
+### `GET /v1/runs/{run_id}`
 
-- Returns the in-memory run envelope.
-- `200` on success.
-- `404` with error envelope when run does not exist.
+- Returns `RunEnvelope` (`run`, `steps`, `approvals`, `permits`)
 
-### `POST /v2/runs/{run_id}/step-intents`
+### `POST /v1/runs/{run_id}/step-intents`
 
-- Request body: `StepIntent`.
-- Evaluates intent and appends a new step to the run.
-- Decision rule for approval:
-  - approval required only when `step_type == tool_call`
-  - and `risk_level` is one of `write`, `external`, `high`
-- Returns `200` with `Step`.
-- Returns `400` for invalid terminal run state.
-- Returns `404` when run does not exist.
+- Input: `StepIntent`
+- Evaluates policy and transitions step/run state
+- Returns `Step`
+- Idempotent by `run_id + (client_step_id|step_id)`
 
-### `POST /v2/approvals/{approval_id}/grant`
+### `POST /v1/approvals/{approval_id}/grant`
+### `POST /v1/approvals/{approval_id}/deny`
+### `POST /v1/approvals/{approval_id}/cancel`
 
-- Grants a pending approval.
-- Updates related step/request status and issues an execution permit.
-- Returns `204` on success.
-- Returns `404` when approval or run does not exist.
+- Input: `ApprovalActionRequest`
+- Applies approval state transition and updates related step/run
+- Returns updated `Approval`
+- Idempotent per `(approval_id, action)`
+
+### `POST /v1/runs/{run_id}/step-results`
+
+- Input: `StepResultSubmission`
+- Updates step/run completion state
+- Returns `StepResultResponse`
+- Idempotent by `run_id + step_id`
+
+### `GET /v1/audit/runs/{run_id}`
+
+- Returns all recorded `AuditEvent` for the run
+
+## State Machines
+
+### Run
+
+- `accepted -> planning`
+- `planning -> waiting_for_approval`
+- `planning -> ready`
+- `waiting_for_approval -> ready`
+- `ready -> running`
+- `running -> succeeded`
+- `running -> failed`
+- `* -> cancelled`
+
+Invalid transition returns `422 invalid_transition`.
+
+### Step
+
+- `declared -> evaluating`
+- `evaluating -> approval_required|permitted`
+- `approval_required -> permitted|rejected`
+- `permitted -> executing|failed`
+- `executing -> completed|failed`
+- `* -> cancelled`
+
+## Policy and Approver Resolution
+
+Policy input includes:
+
+- provider
+- capability
+- risk_level
+- environment
+- metadata
+
+Policy output:
+
+- `allow`
+- `deny`
+- `require_approval`
+
+Approvers are resolved by configuration:
+
+- `approver.default_approvers`
+- `approver.production_approvers`
+
+No hardcoded approver identity is used.
+
+## Idempotency and Conflict
+
+Arbiter stores:
+
+- idempotency key
+- canonical payload hash
+- first response snapshot
+- timestamp
+
+Conflict behavior (`409 conflict`):
+
+- duplicate with same payload -> returns original response
+- duplicate with different payload -> conflict error
+
+## Audit Integrity
+
+Audit fields include:
+
+- `event_id`
+- `event_type`
+- `run_id`
+- `step_id`
+- `approval_id`
+- `actor`
+- `timestamp`
+- `payload_hash`
+- `prev_hash`
+- `hash`
+- `rationale`
+- `policy_refs`
+
+Hash chain is restart-safe:
+
+- startup restores last hash from persisted log
+- append links to restored `prev_hash`
+- `audit-verify` validates entire chain
+
+## Store Backends
+
+- `memory`
+- `sqlite`
+
+`sqlite` stores runs, approval mapping, and idempotency records.
 
 ## Error Envelope
-
-Error responses use a stable JSON envelope:
 
 ```json
 {
@@ -70,50 +153,13 @@ Error responses use a stable JSON envelope:
 }
 ```
 
-Code families used by runtime handlers include:
+Used status codes:
 
-- `run.not_found`
-- `approval.not_found`
-- `run.invalid_state`
-- `internal.error`
-
-## Data and State
-
-- Runtime store is in-memory (`HashMap`) for runs and approval mapping.
-- State is process-local and is reset on restart.
-- Audit stream is append-only JSONL and includes a hash chain:
-  - `prev_hash`
-  - `record_hash`
-
-## Audit Integrity
-
-- Every mutating runtime action appends an audit record.
-- If `audit.immutable_mirror_path` is configured, each record is also appended to mirror output.
-- Verification command:
-
-```bash
-arbiter audit-verify --path ./arbiter-audit.jsonl --mirror-path ./arbiter-audit-mirror.jsonl
-```
-
-## Configuration
-
-- Config schema accepts `store.kind = memory|sqlite`.
-- Server runtime uses an in-memory store implementation.
-- Governance and policy values are loaded and validated from config.
-- Step approval decision uses request payload (`step_type`, `risk_level`) and does not read policy toggles from config.
-
-## Non-Goals
-
-- No connector runtime.
-- No executor runtime.
-- No background scheduler.
-- No automatic state transitions outside explicit API calls.
-
-## Authoritative References
-
-- Runtime routing: `crates/arbiter-server/src/lib.rs`
-- Runtime handlers: `crates/arbiter-server/src/handlers.rs`
-- Runtime state store: `crates/arbiter-server/src/store.rs`
-- Audit implementation: `crates/arbiter-server/src/audit.rs`
-- Shared contracts/types: `crates/arbiter-contracts/src/lib.rs`
-- OpenAPI document: `openapi/v1.yaml`
+- `400 invalid_request`
+- `401 unauthorized`
+- `403 forbidden`
+- `404 not_found`
+- `409 conflict`
+- `422 invalid_transition`
+- `423 approval_required`
+- `500 internal_error`
