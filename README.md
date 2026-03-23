@@ -1,7 +1,5 @@
 # Arbiter
 
-[English](README.md) | [日本語](README.ja.md)
-
 Arbiter is a provider-agnostic governance mediator for AI applications.
 
 It unifies contracts, policy visibility, deterministic planning, idempotency safety, and tamper-evident audit.
